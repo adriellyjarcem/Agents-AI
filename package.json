@@ -1,0 +1,27 @@
+{
+  "name": "escritorio-virtual",
+  "version": "0.1.0",
+  "description": "Escritório virtual em pixel art para acompanhar agentes do Claude Code",
+  "main": "server/index.mjs",
+  "scripts": {
+    "start": "node server/index.mjs",
+    "demo": "node scripts/demo.mjs",
+    "install-hooks": "node scripts/install-hooks.mjs",
+    "remove-hooks": "node scripts/install-hooks.mjs --remove"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adriellyjarcem/Agents-AI.git"
+  },
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/adriellyjarcem/Agents-AI/issues"
+  },
+  "homepage": "https://github.com/adriellyjarcem/Agents-AI#readme",
+  "dependencies": {
+    "express": "^4.22.3",
+    "phaser": "^3.80.1",
+    "ws": "^8.22.0"
+  },
+  "type": "module"
+}

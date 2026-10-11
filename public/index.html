@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Escritório Virtual</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header id="hud">
+    <strong>🏢 Escritório Virtual</strong>
+    <span class="pill working"><i></i> Trabalhando <b id="count-working">0</b></span>
+    <span class="pill waiting"><i></i> Esperando você <b id="count-waiting">0</b></span>
+    <span class="pill idle"><i></i> Livres <b id="count-idle">0</b></span>
+    <span id="conn" class="conn off">desconectado</span>
+  </header>
+  <div id="game"></div>
+  <div id="empty" hidden>
+    <h2>Ninguém no escritório ainda</h2>
+    <p>Abra uma sessão do Claude Code (com os hooks instalados) ou rode <code>npm run demo</code>.</p>
+  </div>
+  <script src="/vendor/phaser.min.js"></script>
+  <script type="module" src="office.js"></script>
+</body>
+</html>
