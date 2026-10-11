@@ -86,6 +86,8 @@ git add .claude && git commit -m "Hooks do escritório virtual" && git push
 
 Depois, no ambiente da nuvem (configurações do ambiente em claude.ai/code), adicione as variáveis
 `OFFICE_URL` (o endereço do Render) e `OFFICE_TOKEN` (a senha). A senha nunca vai para o repositório.
+Se o acesso à rede do ambiente for limitado, adicione `onrender.com` em **Allowed domains**
+([como fazer](https://code.claude.com/docs/en/cloud-environments#network-access)).
 
 **Privacidade:** online, os hooks mandam só o nome da pasta, nomes de arquivo, padrões de busca, a
 descrição dos comandos e só o *nome do programa* rodado (`git`, `npm`), nunca o comando completo nem o
