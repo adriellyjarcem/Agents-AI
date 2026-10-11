@@ -2,6 +2,11 @@
 // Simula várias sessões do Claude Code mandando eventos para o escritório,
 // para ver tudo funcionando sem precisar abrir o Claude Code.
 
+import { spawnSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const statusLineScript = join(dirname(fileURLToPath(import.meta.url)), '..', 'hooks', 'office-statusline.mjs');
 const url = `http://localhost:${process.env.OFFICE_PORT || 4321}/event`;
 
 const sessions = [
@@ -71,3 +76,19 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 sessions.forEach(runSession);
+
+// Uso do plano subindo aos poucos, enviado pelo mesmo status line que o
+// Claude Code usa de verdade.
+const startedAt = Date.now() / 1000;
+function sendUsage() {
+  const minutes = (Date.now() / 1000 - startedAt) / 60;
+  const rate_limits = {
+    five_hour: { used_percentage: Math.min(100, 32 + minutes * 4), resets_at: Math.round(startedAt + 85 * 60) },
+    seven_day: { used_percentage: Math.min(100, 36 + minutes), resets_at: Math.round(startedAt + 4 * 24 * 3600) },
+  };
+  spawnSync(process.execPath, [statusLineScript], {
+    input: JSON.stringify({ model: { display_name: 'Demo' }, rate_limits }),
+  });
+}
+sendUsage();
+setInterval(sendUsage, 15000);

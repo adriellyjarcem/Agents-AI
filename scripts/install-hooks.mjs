@@ -6,8 +6,13 @@
 //   node scripts/install-hooks.mjs                 instala no global
 //   node scripts/install-hooks.mjs --project DIR   instala só no projeto DIR
 //   node scripts/install-hooks.mjs --remove        remove
+//   node scripts/install-hooks.mjs --no-statusline não mexe no status line
+//
+// Também configura o status line, que é por onde o Claude Code informa os
+// limites de uso (5 h e semanal). Se já houver um status line, ele é guardado
+// em config/statusline-anterior.json e continua sendo exibido.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,15 +31,19 @@ const WITH_MATCHER = new Set(['PreToolUse', 'PostToolUse']);
 
 const args = process.argv.slice(2);
 const remove = args.includes('--remove');
+const withStatusLine = !args.includes('--no-statusline');
 const projectIdx = args.indexOf('--project');
 const settingsPath =
   projectIdx >= 0
     ? join(resolve(args[projectIdx + 1] ?? '.'), '.claude', 'settings.json')
     : join(homedir(), '.claude', 'settings.json');
 
-const hookScript = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'hooks', MARK);
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // Barras normais funcionam em qualquer shell, inclusive no Windows.
-const command = `node "${hookScript.replace(/\\/g, '/')}"`;
+const nodeCommand = (file) => `node "${join(ROOT, 'hooks', file).replace(/\\/g, '/')}"`;
+const command = nodeCommand(MARK);
+const STATUS_MARK = 'office-statusline.mjs';
+const previousStatusFile = join(ROOT, 'config', 'statusline-anterior.json');
 
 let settings = {};
 if (existsSync(settingsPath)) {
@@ -62,6 +71,22 @@ for (const event of EVENTS) {
   else delete settings.hooks[event];
 }
 if (!Object.keys(settings.hooks).length) delete settings.hooks;
+
+if (withStatusLine) {
+  const current = settings.statusLine;
+  const isOurs = current?.command?.includes(STATUS_MARK);
+  if (!remove && !isOurs) {
+    if (current) writeFileSync(previousStatusFile, JSON.stringify(current, null, 2) + '\n');
+    settings.statusLine = { type: 'command', command: nodeCommand(STATUS_MARK), padding: current?.padding ?? 0 };
+  } else if (remove && isOurs) {
+    if (existsSync(previousStatusFile)) {
+      settings.statusLine = JSON.parse(readFileSync(previousStatusFile, 'utf8'));
+      rmSync(previousStatusFile);
+    } else {
+      delete settings.statusLine;
+    }
+  }
+}
 
 writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
 console.log(`${remove ? 'Hooks removidos de' : 'Hooks instalados em'} ${settingsPath}`);

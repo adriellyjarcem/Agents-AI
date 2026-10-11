@@ -12,6 +12,14 @@
     <span class="pill working"><i></i> Trabalhando <b id="count-working">0</b></span>
     <span class="pill waiting"><i></i> Esperando você <b id="count-waiting">0</b></span>
     <span class="pill idle"><i></i> Livres <b id="count-idle">0</b></span>
+    <div id="usage" hidden>
+      <div class="meter" data-window="five_hour" hidden>
+        <span class="label">5h</span><span class="bar"><i></i></span><b class="pct"></b><small class="reset"></small>
+      </div>
+      <div class="meter" data-window="seven_day" hidden>
+        <span class="label">Semana</span><span class="bar"><i></i></span><b class="pct"></b><small class="reset"></small>
+      </div>
+    </div>
     <span id="conn" class="conn off">desconectado</span>
   </header>
   <div id="game"></div>

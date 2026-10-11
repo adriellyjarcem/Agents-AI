@@ -41,6 +41,7 @@ A porta pode ser trocada com a variável `OFFICE_PORT` (vale para o servidor e p
 
 ```
 Claude Code ──hooks──▶ hooks/office-hook.mjs ──POST /event──▶ server/index.mjs ──WebSocket──▶ public/office.js (Phaser)
+Claude Code ──status line──▶ hooks/office-statusline.mjs ──POST /usage──▶ server/index.mjs
 ```
 
 | Evento do Claude Code | O que acontece no escritório                      |
@@ -57,6 +58,20 @@ Claude Code ──hooks──▶ hooks/office-hook.mjs ──POST /event──�
   lugares favoritos (`cafe`, `bebedouro`, `sofa`, `estante`, `jardim`), amigos e falas.
 - **Vida social**: a cada 5 s o servidor sorteia agentes livres para passear ou se juntar
   com um amigo num lugar que os dois gostam e trocar algumas falas.
+
+## Barras de uso (limite de 5 h e semanal)
+
+No topo aparecem duas barras com quanto do plano você já usou na janela de 5 horas e na semana,
+e quando cada uma reinicia. Elas ficam verdes, amarelas a partir de 60% e vermelhas a partir de 85%.
+
+O Claude Code só informa esses limites para o **status line**, então o `npm run install-hooks`
+também configura um status line (`hooks/office-statusline.mjs`) que repassa os números ao escritório.
+Se você já tinha um status line, ele é guardado em `config/statusline-anterior.json` e continua
+aparecendo igual no terminal; o `npm run remove-hooks` coloca ele de volta. Para não mexer no status
+line, instale com `node scripts/install-hooks.mjs --no-statusline` (aí as barras não aparecem).
+
+Os números só existem para quem usa o Claude Code com assinatura do Claude (Pro/Max) e aparecem
+depois da primeira resposta da sessão. Com várias contas, as barras mostram a que falou por último.
 
 ## Conversas com IA (Claude Haiku)
 
@@ -88,6 +103,6 @@ Controles: arraste para mover a câmera e use a roda do mouse para zoom.
 ## Próximos passos
 
 - [x] Conversas geradas pelo Claude Haiku, no estilo de cada personalidade
-- [ ] Barras de uso (limite de 5 h e semanal) no topo
+- [x] Barras de uso (limite de 5 h e semanal) no topo
 - [ ] Trocar os sprites desenhados por código por um tileset de verdade (ex.: Tiled + LimeZu)
 - [ ] Mostrar subagentes como "estagiários" ao lado do agente principal

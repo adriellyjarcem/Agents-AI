@@ -27,6 +27,8 @@ const personas = JSON.parse(readFileSync(join(ROOT, 'config/personas.json'), 'ut
 const agents = new Map();
 /** Projetos na ordem em que apareceram (define a posição das salas). */
 let projects = [];
+/** Limites de uso do plano, vindos do status line do Claude Code. */
+let usage = {};
 
 // ---------------------------------------------------------------------------
 // Tradução dos eventos do Claude Code em "o que o agente está fazendo"
@@ -170,8 +172,25 @@ function publicAgent(a) {
   };
 }
 
+// Guarda só janelas válidas (com porcentagem e que ainda não reiniciaram).
+export function readUsage(rateLimits = {}, now = Date.now()) {
+  const out = {};
+  for (const key of ['five_hour', 'seven_day']) {
+    const w = rateLimits[key];
+    if (typeof w?.used_percentage !== 'number') continue;
+    if (typeof w.resets_at === 'number' && w.resets_at * 1000 < now) continue;
+    out[key] = { used_percentage: w.used_percentage, resets_at: w.resets_at ?? null };
+  }
+  return out;
+}
+
+function currentUsage() {
+  usage = readUsage(usage);
+  return usage;
+}
+
 function snapshot() {
-  return { type: 'state', projects, agents: [...agents.values()].map(publicAgent) };
+  return { type: 'state', projects, usage: currentUsage(), agents: [...agents.values()].map(publicAgent) };
 }
 
 const app = express();
@@ -183,6 +202,16 @@ app.get('/vendor/phaser.min.js', (_req, res) =>
 
 app.post('/event', (req, res) => {
   if (handleEvent(req.body ?? {})) broadcast(snapshot());
+  res.json({ ok: true });
+});
+
+app.post('/usage', (req, res) => {
+  // Mescla por janela: um relatório sem a semanal não apaga a semanal anterior.
+  const next = readUsage({ ...currentUsage(), ...req.body?.rate_limits });
+  if (JSON.stringify(next) !== JSON.stringify(currentUsage())) {
+    usage = next;
+    broadcast(snapshot());
+  }
   res.json({ ok: true });
 });
 
@@ -206,7 +235,9 @@ const pick = (list) => list[Math.floor(Math.random() * list.length)];
 
 function socialTick() {
   const now = Date.now();
-  let changed = false;
+  // Uma janela de uso que reiniciou some das barras.
+  const usageBefore = JSON.stringify(usage);
+  let changed = JSON.stringify(currentUsage()) !== usageBefore;
 
   for (const agent of [...agents.values()]) {
     const quiet = now - agent.lastEventAt;

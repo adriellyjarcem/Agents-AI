@@ -217,6 +217,43 @@ function makeCharacterTextures(scene, persona) {
 }
 
 // ---------------------------------------------------------------------------
+// Barras de uso (limite de 5 h e semanal)
+// ---------------------------------------------------------------------------
+
+function formatReset(resetsAt) {
+  if (!resetsAt) return '';
+  const ms = resetsAt * 1000 - Date.now();
+  if (ms <= 0) return 'reiniciando…';
+  const min = Math.ceil(ms / 60000);
+  if (min < 60) return `reinicia em ${min} min`;
+  if (min < 24 * 60) return `reinicia em ${Math.floor(min / 60)}h ${String(min % 60).padStart(2, '0')}min`;
+  const when = new Date(resetsAt * 1000);
+  const day = when.toLocaleDateString('pt-BR', { weekday: 'short' }).replace('.', '');
+  const time = when.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  return `reinicia ${day}, ${time}`;
+}
+
+function renderUsage(usage) {
+  let any = false;
+  for (const meter of document.querySelectorAll('#usage .meter')) {
+    const w = usage[meter.dataset.window];
+    if (!w || (w.resets_at && w.resets_at * 1000 < Date.now())) {
+      meter.hidden = true;
+      continue;
+    }
+    any = true;
+    meter.hidden = false;
+    const pct = Math.max(0, Math.min(100, w.used_percentage));
+    meter.querySelector('.bar i').style.width = `${pct}%`;
+    meter.querySelector('.pct').textContent = `${Math.round(w.used_percentage)}%`;
+    meter.querySelector('.reset').textContent = formatReset(w.resets_at);
+    meter.classList.toggle('warn', pct >= 60 && pct < 85);
+    meter.classList.toggle('danger', pct >= 85);
+  }
+  document.getElementById('usage').hidden = !any;
+}
+
+// ---------------------------------------------------------------------------
 // Cena
 // ---------------------------------------------------------------------------
 
@@ -235,6 +272,8 @@ class OfficeScene extends Phaser.Scene {
     this.setupCameraControls();
     this.scale.on('resize', () => this.fitCamera());
     this.connect();
+    // Atualiza o "reinicia em..." mesmo sem novidades do servidor.
+    this.time.addEvent({ delay: 30000, loop: true, callback: () => renderUsage(this.usage ?? {}) });
   }
 
   // --- conexão --------------------------------------------------------------
@@ -748,6 +787,8 @@ class OfficeScene extends Phaser.Scene {
     document.getElementById('count-waiting').textContent = count('waiting');
     document.getElementById('count-idle').textContent = count('idle');
     document.getElementById('empty').hidden = msg.agents.length > 0;
+    this.usage = msg.usage ?? {};
+    renderUsage(this.usage);
   }
 }
 

@@ -6,6 +6,9 @@
   --working: #4fc3f7;
   --waiting: #ffb74d;
   --idle: #9e9e9e;
+  --ok: #66bb6a;
+  --warn: #ffca28;
+  --danger: #ef5350;
 }
 
 * { box-sizing: border-box; }
@@ -40,6 +43,16 @@ html, body {
 .pill.waiting i { background: var(--waiting); }
 .pill.idle i { background: var(--idle); }
 
+#usage { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-left: auto; }
+#usage[hidden], .meter[hidden] { display: none; }
+.meter { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.meter .bar { width: 90px; height: 8px; border-radius: 99px; background: #ffffff1a; overflow: hidden; }
+.meter .bar i { display: block; height: 100%; width: 0; background: var(--ok); transition: width 0.4s, background 0.4s; }
+.meter.warn .bar i { background: var(--warn); }
+.meter.danger .bar i { background: var(--danger); }
+.meter b { color: var(--text); min-width: 3ch; }
+.meter small { font-size: 12px; }
+
 .conn { margin-left: auto; font-size: 12px; padding: 2px 8px; border-radius: 99px; }
 .conn.on { background: #2e7d3255; color: #a5d6a7; }
 .conn.off { background: #c6282855; color: #ef9a9a; }
@@ -61,3 +74,4 @@ html, body {
 #empty h2 { margin: 0 0 4px; font-size: 16px; }
 #empty p { margin: 0; color: var(--muted); font-size: 14px; }
 #empty code { color: var(--text); }
+#usage:not([hidden]) + .conn { margin-left: 0; }
