@@ -8,6 +8,7 @@ import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ChatWriter } from './chat.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.OFFICE_PORT || 4321);
@@ -16,6 +17,9 @@ const PORT = Number(process.env.OFFICE_PORT || 4321);
 // e depois de quanto tempo sem eventos ele sai do escritório.
 const IDLE_AFTER_MS = 5 * 60 * 1000;
 const LEAVE_AFTER_MS = 2 * 60 * 60 * 1000;
+
+const chat = new ChatWriter();
+let hangoutSeq = 0;
 
 const personas = JSON.parse(readFileSync(join(ROOT, 'config/personas.json'), 'utf8'));
 
@@ -82,6 +86,7 @@ function getAgent(sessionId, cwd) {
       lastEventAt: Date.now(),
       startedAt: Date.now(),
       busyUntil: 0,
+      recentWork: [], // últimas ações, viram assunto nas conversas
     };
     agents.set(sessionId, agent);
     if (!projects.includes(project)) projects.push(project);
@@ -119,6 +124,10 @@ export function handleEvent(payload) {
     case 'PreToolUse':
       agent.status = 'working';
       agent.activity = describeTool(payload.tool_name, payload.tool_input);
+      if (agent.recentWork.at(-1) !== agent.activity) {
+        agent.recentWork.push(agent.activity);
+        if (agent.recentWork.length > 6) agent.recentWork.shift();
+      }
       break;
     case 'PostToolUse':
       agent.status = 'working';
@@ -225,13 +234,11 @@ function socialTick() {
     if (friend && Math.random() < 0.6) {
       const shared = agent.persona.gosta.filter((s) => friend.persona.gosta.includes(s));
       const spot = pick(shared.length ? shared : agent.persona.gosta);
-      const lines = [
-        { from: agent.id, text: pick(agent.persona.falas) },
-        { from: friend.id, text: pick(friend.persona.falas) },
-        { from: agent.id, text: pick(agent.persona.falas) },
-      ];
-      agent.busyUntil = friend.busyUntil = now + 20000;
-      broadcast({ type: 'hangout', spot, agents: [agent.id, friend.id], lines });
+      const id = ++hangoutSeq;
+      agent.busyUntil = friend.busyUntil = now + 35000;
+      // Eles já começam a andar; as falas chegam depois, enquanto caminham.
+      broadcast({ type: 'hangout', id, spot, agents: [agent.id, friend.id] });
+      chat.write(agent, friend, spot).then((lines) => broadcast({ type: 'chat', hangout: id, lines }));
     } else {
       // Às vezes volta para a mesa, senão vai a um lugar que gosta.
       const spot = Math.random() < 0.25 ? 'mesa' : pick(agent.persona.gosta);

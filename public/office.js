@@ -225,6 +225,7 @@ class OfficeScene extends Phaser.Scene {
     super('office');
     this.views = new Map();
     this.monitors = new Map();
+    this.hangouts = new Map();
     this.layout = null;
     this.worldLayer = null;
   }
@@ -255,6 +256,7 @@ class OfficeScene extends Phaser.Scene {
       if (msg.type === 'state') this.onState(msg);
       else if (msg.type === 'wander') this.onWander(msg);
       else if (msg.type === 'hangout') this.onHangout(msg);
+      else if (msg.type === 'chat') this.onChat(msg);
     };
   }
 
@@ -708,24 +710,36 @@ class OfficeScene extends Phaser.Scene {
     if (views.length < 2 || views.some((v) => v.data.status !== 'idle')) return;
     for (const v of views) this.goTo(v, { kind: 'spot', spot: msg.spot, slot: this.freeSlot(msg.spot, v) });
 
-    // Espera os dois chegarem e então conversam.
+    const hangout = { views, lines: null };
+    this.hangouts.set(msg.id, hangout);
+
+    // Espera os dois chegarem e as falas chegarem do servidor; então conversam.
     let waited = 0;
     const check = this.time.addEvent({
       delay: 300,
       loop: true,
       callback: () => {
         waited += 300;
-        const ready = views.every((v) => !v.moving);
-        if (!ready && waited < 15000) return;
+        const ready = views.every((v) => !v.moving) && hangout.lines;
+        if (!ready && waited < 25000) return;
         check.remove();
-        msg.lines.forEach((line, i) => {
-          this.time.delayedCall(i * 3600, () => {
+        this.hangouts.delete(msg.id);
+        let at = 0;
+        for (const line of hangout.lines ?? []) {
+          const ms = Math.min(6000, 2200 + line.text.length * 45);
+          this.time.delayedCall(at, () => {
             const v = this.views.get(line.from);
-            if (v && v.data.status === 'idle') this.say(v, line.text);
+            if (v && v.data.status === 'idle') this.say(v, line.text, ms);
           });
-        });
+          at += ms + 300;
+        }
       },
     });
+  }
+
+  onChat(msg) {
+    const hangout = this.hangouts.get(msg.hangout);
+    if (hangout) hangout.lines = msg.lines;
   }
 
   updateHud(msg) {
