@@ -82,9 +82,13 @@ class Layout {
     return { x: T, y: this.corridorY(0) };
   }
 
-  // Posição final de um "lugar" (mesa, ponto de encontro, entrada).
+  // Posição final de um "lugar" (mesa, ponto de encontro, porta da sala, entrada).
   locPos(loc, agent) {
     if (loc.kind === 'spot') return this.spot(loc.spot, loc.slot);
+    if (loc.kind === 'door') {
+      const room = this.room(agent.project);
+      return room ? { x: room.doorX, y: room.y + 0.6 * T } : this.spawn();
+    }
     if (loc.kind === 'desk') {
       const room = this.room(agent.project);
       return room ? this.desk(room, agent.deskIndex) : this.spawn();
@@ -94,6 +98,8 @@ class Layout {
 
   // Caminho de saída de um lugar até o corredor (ou trilha do jardim).
   exitOf(loc, agent, pos) {
+    const doorRoom = loc.kind === 'door' && this.room(agent.project);
+    if (doorRoom) return { row: doorRoom.r, pts: [{ x: doorRoom.doorX, y: this.corridorY(doorRoom.r) }] };
     if (loc.kind === 'desk') {
       const room = this.room(agent.project);
       if (room) {
@@ -119,6 +125,8 @@ class Layout {
   // Caminho do corredor até o lugar (ordem: do corredor para dentro).
   entryOf(loc, agent) {
     const target = this.locPos(loc, agent);
+    const doorRoom = loc.kind === 'door' && this.room(agent.project);
+    if (doorRoom) return { row: doorRoom.r, pts: [{ x: doorRoom.doorX, y: this.corridorY(doorRoom.r) }, target] };
     if (loc.kind === 'desk') {
       const room = this.room(agent.project);
       if (room) {
@@ -459,7 +467,9 @@ class OfficeScene extends Phaser.Scene {
 
   createAgent(data) {
     const key = makeCharacterTexture(this, data.persona);
-    const start = this.layout.spawn();
+    // Subagentes entram pela porta da sala; sessões, pela entrada do escritório.
+    const startLoc = data.parent ? { kind: 'door' } : { kind: 'spawn' };
+    const start = this.layout.locPos(startLoc, data);
     const sprite = this.add.sprite(start.x, start.y, key, FRAME.down).setOrigin(0.5, 1).setScale(PX);
     const dot = this.add.circle(0, 0, 4, 0x9e9e9e).setStrokeStyle(1, 0x000000, 0.4);
     const name = this.add
@@ -494,7 +504,7 @@ class OfficeScene extends Phaser.Scene {
       name,
       dot,
       bubble,
-      loc: { kind: 'spawn' },
+      loc: startLoc,
       moving: false,
       pending: null,
       chatUntil: 0,
@@ -608,7 +618,7 @@ class OfficeScene extends Phaser.Scene {
       view.loc = view.pending;
       view.pending = null;
     }
-    if (view.loc.kind === 'spawn') view.loc = { kind: 'desk' };
+    if (view.loc.kind === 'spawn' || view.loc.kind === 'door') view.loc = { kind: 'desk' };
     const p = this.layout.locPos(view.loc, view.data);
     view.sprite.setPosition(p.x, p.y);
     this.onArrive(view);
@@ -623,7 +633,7 @@ class OfficeScene extends Phaser.Scene {
       view.tween?.stop();
       view.moving = false;
     }
-    this.goTo(view, { kind: 'spawn' });
+    this.goTo(view, view.data.parent ? { kind: 'door' } : { kind: 'spawn' });
   }
 
   refreshMonitors() {

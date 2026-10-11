@@ -8,7 +8,8 @@
     "demo": "node scripts/demo.mjs",
     "install-hooks": "node scripts/install-hooks.mjs",
     "remove-hooks": "node scripts/install-hooks.mjs --remove",
-    "build-tileset": "node scripts/build-tileset.mjs"
+    "build-tileset": "node scripts/build-tileset.mjs",
+    "abrir": "node server/index.mjs --abrir"
   },
   "repository": {
     "type": "git",

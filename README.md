@@ -8,12 +8,19 @@ conversa com os amigos, cada um com sua personalidade.
 
 ## Como rodar
 
-Requer Node 18+.
+Requer Node 18+ e o Claude Code instalado.
+
+**No Windows:** dê dois cliques em `iniciar.bat`. Ele instala o que falta na primeira vez, sobe o
+escritório e abre o navegador. Deixe a janela preta aberta enquanto estiver usando.
+
+**Pelo terminal (qualquer sistema):**
 
 ```bash
 npm install
-npm start            # abre o escritório em http://localhost:4321
+npm run abrir        # sobe o escritório e abre http://localhost:4321
 ```
+
+(`npm start` faz o mesmo sem abrir o navegador.)
 
 Para ver funcionando sem o Claude Code, em outro terminal:
 
@@ -27,15 +34,45 @@ npm run demo         # simula 7 agentes em 3 projetos
 npm run install-hooks
 ```
 
-Isso adiciona hooks no `~/.claude/settings.json` (global, para todos os projetos aparecerem).
+Isso adiciona hooks no `~/.claude/settings.json` (global, para todos os projetos aparecerem)
+e cria os subagentes do time em `~/.claude/agents/` (veja abaixo).
 Os hooks que você já tinha são mantidos, e o arquivo original fica salvo em `settings.json.bak`.
-Depois é só abrir sessões do Claude Code normalmente com o `npm start` rodando.
+Depois é só abrir sessões do Claude Code normalmente com o escritório rodando.
+Rode de novo sempre que atualizar o projeto (`git pull`), para pegar hooks e subagentes novos.
 
 - Só em um projeto: `node scripts/install-hooks.mjs --project caminho/do/projeto`
 - Remover: `npm run remove-hooks`
 
 Se o servidor estiver desligado, o hook simplesmente não faz nada, e o Claude Code não é afetado.
 A porta pode ser trocada com a variável `OFFICE_PORT` (vale para o servidor e para o hook).
+
+## O time: coordenadores e subagentes
+
+Cada sessão do Claude Code que você abre aparece como um **coordenador** (Ana, Bruno, Júlia, Tiago).
+Os outros personagens são **subagentes de verdade** do Claude Code, cada um com um papel:
+
+| Personagem | Papel | Mexe nos arquivos? |
+| ---------- | ----- | ------------------ |
+| Ícaro | Prototipador: protótipos, scripts e automações | sim |
+| Igor | Testador: escreve e roda testes | sim |
+| Maitê | Front-end e UX: telas, CSS, acessibilidade | sim |
+| Camila | Planejadora: quebra tarefas grandes em passos | não |
+| Wagner | Depurador: investiga bugs e logs | sim |
+| Vitória | Performance: mede e otimiza | sim |
+| Ricardo | Segurança: revisa vulnerabilidades | não |
+| Nicolas | Explorador: explica como o código funciona | não |
+| Luan | Refatorador: simplifica sem mudar comportamento | sim |
+| Helena | Documentadora: README, guias e comentários | sim |
+
+O Claude Code delega sozinho quando a tarefa combina com um papel, ou você pode pedir direto:
+*"peça ao Igor para escrever testes para o carrinho"*, *"chama o Ricardo para revisar o login"*.
+Quando isso acontece, o personagem entra pela porta da sala, senta numa mesa, mostra o que está
+fazendo e sai quando termina.
+
+Os papéis ficam no `config/personas.json` (`papel`, `quandoUsar`, `instrucoes`, `ferramentas`).
+Depois de editar, rode `npm run install-hooks` de novo. O instalador só sobrescreve os arquivos de
+subagente que ele mesmo criou; um `~/.claude/agents/igor.md` feito por você nunca é tocado.
+Para não criar subagentes, use `node scripts/install-hooks.mjs --no-subagents`.
 
 ## Como funciona
 
@@ -51,6 +88,7 @@ Claude Code ──status line──▶ hooks/office-statusline.mjs ──POST /u
 | `PreToolUse`          | Balão com a ação (buscar, ler, editar, rodar…)    |
 | `Notification`        | Balão laranja "Precisa de você!"                  |
 | `Stop`                | "Entregue ✓" e fica livre para passear            |
+| `SubagentStart`/`Stop`| O subagente entra na sala, trabalha e sai         |
 | `SessionEnd`          | Diz tchau e sai do escritório                     |
 
 - **Salas**: uma por projeto (nome da pasta da sessão), 3 por fileira, 6 mesas cada.
@@ -119,4 +157,4 @@ Controles: arraste para mover a câmera e use a roda do mouse para zoom.
 - [x] Conversas geradas pelo Claude Haiku, no estilo de cada personalidade
 - [x] Barras de uso (limite de 5 h e semanal) no topo
 - [x] Tileset de pixel art com personagens animados
-- [ ] Mostrar subagentes como "estagiários" ao lado do agente principal
+- [x] Subagentes com papéis de verdade, aparecendo no escritório

@@ -4,6 +4,7 @@
 
 import express from 'express';
 import { WebSocketServer } from 'ws';
+import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
@@ -64,41 +65,75 @@ export function describeTool(name, input = {}) {
   }
 }
 
-function pickPersona() {
+// Sessões principais ficam com os coordenadores (personas sem subagente);
+// os outros personagens são reservados para quando o subagente deles trabalha.
+function pickPersona({ forSubagent = null } = {}) {
   const used = new Set([...agents.values()].map((a) => a.persona.id));
-  const free = personas.filter((p) => !used.has(p.id));
-  if (free.length) return { persona: free[0], suffix: '' };
-  // Mais sessões que personas: reaproveita com um número no nome.
-  const p = personas[agents.size % personas.length];
-  return { persona: p, suffix: ` ${Math.floor(agents.size / personas.length) + 1}` };
+  const named = forSubagent && personas.find((p) => p.id === forSubagent);
+  if (named) return { persona: named, suffix: used.has(named.id) ? ' 2' : '' };
+
+  const pool = forSubagent
+    ? personas.filter((p) => !p.coordenador)
+    : [...personas.filter((p) => p.coordenador), ...personas.filter((p) => !p.coordenador)];
+  const free = pool.find((p) => !used.has(p.id));
+  if (free) return { persona: free, suffix: '' };
+  // Mais agentes que personas: reaproveita com um número no nome.
+  const p = pool[agents.size % pool.length];
+  return { persona: p, suffix: ` ${Math.floor(agents.size / pool.length) + 1}` };
+}
+
+function newAgent(id, persona, nome, project, extra = {}) {
+  const agent = {
+    id,
+    nome,
+    persona,
+    project,
+    status: 'idle',
+    activity: '',
+    lastEventAt: Date.now(),
+    startedAt: Date.now(),
+    busyUntil: 0,
+    recentWork: [], // últimas ações, viram assunto nas conversas
+    ...extra,
+  };
+  agents.set(id, agent);
+  if (!projects.includes(project)) projects.push(project);
+  return agent;
 }
 
 function getAgent(sessionId, cwd) {
   let agent = agents.get(sessionId);
   if (!agent) {
     const { persona, suffix } = pickPersona();
-    const project = cwd ? basename(cwd) : 'sem-projeto';
-    agent = {
-      id: sessionId,
-      nome: persona.nome + suffix,
-      persona,
-      project,
-      status: 'idle',
-      activity: '',
-      lastEventAt: Date.now(),
-      startedAt: Date.now(),
-      busyUntil: 0,
-      recentWork: [], // últimas ações, viram assunto nas conversas
-    };
-    agents.set(sessionId, agent);
-    if (!projects.includes(project)) projects.push(project);
+    agent = newAgent(sessionId, persona, persona.nome + suffix, cwd ? basename(cwd) : 'sem-projeto');
   }
   agent.lastEventAt = Date.now();
   return agent;
 }
 
-function removeAgent(sessionId) {
-  agents.delete(sessionId);
+// Subagente: um personagem à parte, na mesma sala da sessão que o chamou.
+// Se existir uma persona com o mesmo nome do subagente (ex.: "igor"), é ela.
+function getSubagent(payload) {
+  const id = `${payload.session_id}:${payload.agent_id}`;
+  let agent = agents.get(id);
+  if (!agent) {
+    const type = payload.agent_type || 'ajudante';
+    const { persona, suffix } = pickPersona({ forSubagent: type });
+    const isPersona = persona.id === type;
+    const parent = getAgent(payload.session_id, payload.cwd);
+    agent = newAgent(id, persona, isPersona ? persona.nome + suffix : type, parent.project, {
+      parent: payload.session_id,
+      status: 'working',
+    });
+  }
+  agent.lastEventAt = Date.now();
+  return agent;
+}
+
+function removeAgent(id) {
+  agents.delete(id);
+  // Quando a sessão acaba, os subagentes dela vão junto.
+  for (const a of [...agents.values()]) if (a.parent === id) agents.delete(a.id);
   const active = new Set([...agents.values()].map((a) => a.project));
   projects = projects.filter((p) => active.has(p));
 }
@@ -112,9 +147,18 @@ export function handleEvent(payload) {
     removeAgent(sessionId);
     return true;
   }
+  if (event === 'SubagentStop') {
+    if (payload.agent_id) removeAgent(`${sessionId}:${payload.agent_id}`);
+    return true;
+  }
 
-  const agent = getAgent(sessionId, payload.cwd);
+  // Eventos de dentro de um subagente vêm com agent_id: vão para o personagem dele.
+  const agent = payload.agent_id ? getSubagent(payload) : getAgent(sessionId, payload.cwd);
   switch (event) {
+    case 'SubagentStart':
+      agent.status = 'working';
+      agent.activity = 'Chegando para ajudar';
+      break;
     case 'SessionStart':
       agent.status = 'idle';
       agent.activity = 'Chegou no escritório';
@@ -161,6 +205,7 @@ function publicAgent(a) {
     project: a.project,
     status: a.status,
     activity: a.activity,
+    parent: a.parent ?? null,
     persona: {
       id: a.persona.id,
       pele: a.persona.pele,
@@ -280,9 +325,29 @@ function socialTick() {
   }
 }
 
+// Abre o navegador no escritório (com --abrir).
+function openBrowser(url) {
+  const [cmd, args] =
+    process.platform === 'win32'
+      ? ['cmd', ['/c', 'start', '', url]]
+      : [process.platform === 'darwin' ? 'open' : 'xdg-open', [url]];
+  spawn(cmd, args, { stdio: 'ignore', detached: true }).on('error', () => {}).unref();
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const url = `http://localhost:${PORT}`;
+  const open = process.argv.includes('--abrir');
+  server.on('error', (error) => {
+    if (error.code !== 'EADDRINUSE') throw error;
+    // Já tem um escritório rodando nessa porta: só abre o navegador.
+    console.log(`O escritório já está rodando em ${url}`);
+    if (open) openBrowser(url);
+    process.exit(0);
+  });
   setInterval(socialTick, 5000);
   server.listen(PORT, () => {
-    console.log(`Escritório virtual rodando em http://localhost:${PORT}`);
+    console.log(`Escritório virtual rodando em ${url}`);
+    console.log('Deixe esta janela aberta. Para desligar, feche-a ou aperte Ctrl+C.');
+    if (open) openBrowser(url);
   });
 }
