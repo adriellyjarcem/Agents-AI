@@ -1,7 +1,7 @@
 {
   "name": "escritorio-virtual",
   "version": "0.1.0",
-  "description": "Escrit\u00f3rio virtual em pixel art para acompanhar agentes do Claude Code",
+  "description": "Escritório virtual em pixel art para acompanhar agentes do Claude Code",
   "main": "server/index.mjs",
   "scripts": {
     "start": "node server/index.mjs",
@@ -27,5 +27,8 @@
     "ws": "^8.22.0",
     "zod": "^4.6.6"
   },
-  "type": "module"
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  }
 }

@@ -9,6 +9,14 @@
 //   node scripts/install-hooks.mjs --no-statusline não mexe no status line
 //   node scripts/install-hooks.mjs --no-subagents  não cria os subagentes
 //
+// Versão online:
+//   --url https://... --token SENHA   manda os eventos para o escritório online
+//   --local                           volta a mandar para o escritório local
+//   --project DIR --embutir           copia o hook para dentro do repositório DIR,
+//                                     para sessões na nuvem (claude.ai/code) também
+//                                     aparecerem; lá, endereço e senha vêm das
+//                                     variáveis OFFICE_URL e OFFICE_TOKEN
+//
 // Também configura o status line, que é por onde o Claude Code informa os
 // limites de uso (5 h e semanal). Se já houver um status line, ele é guardado
 // em config/statusline-anterior.json e continua sendo exibido.
@@ -40,6 +48,8 @@ const args = process.argv.slice(2);
 const remove = args.includes('--remove');
 const withStatusLine = !args.includes('--no-statusline');
 const withSubagents = !args.includes('--no-subagents');
+const embed = args.includes('--embutir');
+const argValue = (name) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
 const projectIdx = args.indexOf('--project');
 const settingsPath =
   projectIdx >= 0
@@ -49,7 +59,35 @@ const settingsPath =
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // Barras normais funcionam em qualquer shell, inclusive no Windows.
 const nodeCommand = (file) => `node "${join(ROOT, 'hooks', file).replace(/\\/g, '/')}"`;
-const command = nodeCommand(MARK);
+let command = nodeCommand(MARK);
+
+if (embed) {
+  if (projectIdx < 0) {
+    console.error('--embutir precisa de --project CAMINHO_DO_REPOSITORIO');
+    process.exit(1);
+  }
+  // O hook vai junto com o repositório (para commitar), então funciona em
+  // qualquer máquina que abrir o projeto, inclusive na nuvem.
+  const hooksDir = join(dirname(settingsPath), 'hooks');
+  if (!remove) {
+    mkdirSync(hooksDir, { recursive: true });
+    for (const file of [MARK, 'conexao.mjs']) copyFileSync(join(ROOT, 'hooks', file), join(hooksDir, file));
+  } else {
+    for (const file of [MARK, 'conexao.mjs']) rmSync(join(hooksDir, file), { force: true });
+  }
+  command = `node "$CLAUDE_PROJECT_DIR/.claude/hooks/${MARK}"`;
+}
+
+// Endereço do escritório online (fica só nesta máquina, fora do git).
+const connectionFile = join(ROOT, 'config', 'conexao.json');
+if (args.includes('--local')) {
+  rmSync(connectionFile, { force: true });
+  console.log('Hooks voltaram a apontar para o escritório local (http://localhost:4321).');
+} else if (argValue('--url')) {
+  const url = argValue('--url').replace(/\/+$/, '');
+  writeFileSync(connectionFile, JSON.stringify({ url, token: argValue('--token') ?? '' }, null, 2) + '\n');
+  console.log(`Hooks apontando para o escritório online: ${url}`);
+}
 const STATUS_MARK = 'office-statusline.mjs';
 const previousStatusFile = join(ROOT, 'config', 'statusline-anterior.json');
 
@@ -80,7 +118,8 @@ for (const event of EVENTS) {
 }
 if (!Object.keys(settings.hooks).length) delete settings.hooks;
 
-if (withStatusLine) {
+// O status line é da máquina, não do repositório: não vai junto com --embutir.
+if (withStatusLine && !embed) {
   const current = settings.statusLine;
   const isOurs = current?.command?.includes(STATUS_MARK);
   if (!remove && !isOurs) {

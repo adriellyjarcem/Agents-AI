@@ -256,6 +256,53 @@ function renderUsage(usage) {
 }
 
 // ---------------------------------------------------------------------------
+// Senha (versão online): vem do link (#senha=...) ou do que foi digitado antes
+// ---------------------------------------------------------------------------
+
+const TOKEN_KEY = 'escritorio-senha';
+
+function storeToken(token) {
+  try {
+    if (token) localStorage.setItem(TOKEN_KEY, token);
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // navegador sem armazenamento: pede a senha a cada visita
+  }
+}
+
+function readToken() {
+  const fromLink = location.hash.match(/senha=([^&]+)/);
+  if (fromLink) {
+    const token = decodeURIComponent(fromLink[1]);
+    storeToken(token);
+    history.replaceState(null, '', location.pathname); // tira a senha da barra de endereço
+    return token;
+  }
+  try {
+    return localStorage.getItem(TOKEN_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function askToken(error = '') {
+  const form = document.getElementById('login');
+  const input = document.getElementById('senha');
+  document.getElementById('login-erro').textContent = error;
+  form.hidden = false;
+  input.value = '';
+  input.focus();
+  return new Promise((resolve) => {
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      form.hidden = true;
+      storeToken(input.value.trim());
+      resolve(input.value.trim());
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Cena
 // ---------------------------------------------------------------------------
 
@@ -281,7 +328,7 @@ class OfficeScene extends Phaser.Scene {
     this.cameras.main.setBackgroundColor('#1e2129');
     this.setupCameraControls();
     this.scale.on('resize', () => this.fitCamera());
-    this.connect();
+    this.start();
     // Atualiza o "reinicia em..." mesmo sem novidades do servidor.
     this.time.addEvent({ delay: 30000, loop: true, callback: () => renderUsage(this.usage ?? {}) });
   }
@@ -292,16 +339,34 @@ class OfficeScene extends Phaser.Scene {
 
   // --- conexão --------------------------------------------------------------
 
+  async start() {
+    this.token = readToken();
+    try {
+      const { protegido } = await (await fetch('api/config')).json();
+      if (protegido && !this.token) this.token = await askToken();
+    } catch {
+      // servidor fora do ar: connect() tenta de novo sozinho
+    }
+    this.connect();
+  }
+
   connect() {
     const conn = document.getElementById('conn');
-    const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const ws = new WebSocket(`${proto}://${location.host}/ws?token=${encodeURIComponent(this.token ?? '')}`);
     ws.onopen = () => {
       conn.textContent = 'conectado';
       conn.className = 'conn on';
     };
-    ws.onclose = () => {
+    ws.onclose = async (e) => {
       conn.textContent = 'desconectado';
       conn.className = 'conn off';
+      if (e.code === 4401) {
+        storeToken('');
+        this.token = await askToken(this.token ? 'Senha incorreta, tente de novo.' : '');
+        this.connect();
+        return;
+      }
       setTimeout(() => this.connect(), 2000);
     };
     ws.onmessage = (e) => {

@@ -1,0 +1,19 @@
+# Configuração para hospedar o escritório no Render (plano gratuito).
+# No Render: New > Blueprint > escolha este repositório. A senha (OFFICE_TOKEN)
+# é gerada automaticamente; veja em Environment depois do deploy.
+services:
+  - type: web
+    name: escritorio-virtual
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /saude
+    envVars:
+      - key: OFFICE_TOKEN
+        generateValue: true
+      - key: NODE_VERSION
+        value: "22"
+      # Opcional: conversas entre agentes escritas pelo Claude Haiku
+      - key: ANTHROPIC_API_KEY
+        sync: false

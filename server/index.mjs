@@ -5,6 +5,7 @@
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import { spawn } from 'node:child_process';
+import { timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
@@ -12,7 +13,10 @@ import { fileURLToPath } from 'node:url';
 import { ChatWriter } from './chat.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const PORT = Number(process.env.OFFICE_PORT || 4321);
+// PORT é a porta que provedores como o Render definem.
+const PORT = Number(process.env.OFFICE_PORT || process.env.PORT || 4321);
+// Com OFFICE_TOKEN definido (versão online), tudo exige essa senha.
+const TOKEN = process.env.OFFICE_TOKEN || '';
 
 // Depois de quanto tempo sem eventos um agente "trabalhando" vira ocioso,
 // e depois de quanto tempo sem eventos ele sai do escritório.
@@ -130,7 +134,11 @@ function getSubagent(payload) {
   return agent;
 }
 
-function removeAgent(id) {
+// Quem já saiu, e quando: eventos atrasados não podem trazê-lo de volta.
+const ended = new Map();
+
+function removeAgent(id, ts = Date.now()) {
+  ended.set(id, ts);
   agents.delete(id);
   // Quando a sessão acaba, os subagentes dela vão junto.
   for (const a of [...agents.values()]) if (a.parent === id) agents.delete(a.id);
@@ -143,17 +151,21 @@ export function handleEvent(payload) {
   const sessionId = payload.session_id;
   if (!event || !sessionId) return false;
 
-  if (event === 'SessionEnd') {
-    removeAgent(sessionId);
-    return true;
-  }
-  if (event === 'SubagentStop') {
-    if (payload.agent_id) removeAgent(`${sessionId}:${payload.agent_id}`);
+  // Online os eventos vão em paralelo e podem chegar fora de ordem: cada um
+  // traz a hora em que aconteceu, e os atrasados são ignorados.
+  const ts = Number(payload.ts) || Date.now();
+  const id = payload.agent_id ? `${sessionId}:${payload.agent_id}` : sessionId;
+  if (ts <= (ended.get(id) ?? -1) || ts <= (ended.get(sessionId) ?? -1)) return false;
+  if (ts < (agents.get(id)?.lastTs ?? 0)) return false;
+
+  if (event === 'SessionEnd' || event === 'SubagentStop') {
+    if (event === 'SessionEnd' || payload.agent_id) removeAgent(id, ts);
     return true;
   }
 
   // Eventos de dentro de um subagente vêm com agent_id: vão para o personagem dele.
   const agent = payload.agent_id ? getSubagent(payload) : getAgent(sessionId, payload.cwd);
+  agent.lastTs = ts;
   switch (event) {
     case 'SubagentStart':
       agent.status = 'working';
@@ -239,19 +251,34 @@ function snapshot() {
   return { type: 'state', projects, usage: currentUsage(), agents: [...agents.values()].map(publicAgent) };
 }
 
+function validToken(given) {
+  if (!TOKEN) return true;
+  const a = Buffer.from(String(given ?? ''));
+  const b = Buffer.from(TOKEN);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+function requireToken(req, res, next) {
+  const header = req.headers.authorization ?? '';
+  if (validToken(header.startsWith('Bearer ') ? header.slice(7) : undefined)) return next();
+  res.status(401).json({ erro: 'senha inválida' });
+}
+
 const app = express();
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '64kb' }));
 app.use(express.static(join(ROOT, 'public')));
+app.get('/saude', (_req, res) => res.json({ ok: true }));
+app.get('/api/config', (_req, res) => res.json({ protegido: Boolean(TOKEN) }));
 app.get('/vendor/phaser.min.js', (_req, res) =>
   res.sendFile(join(ROOT, 'node_modules/phaser/dist/phaser.min.js')),
 );
 
-app.post('/event', (req, res) => {
+app.post('/event', requireToken, (req, res) => {
   if (handleEvent(req.body ?? {})) broadcast(snapshot());
   res.json({ ok: true });
 });
 
-app.post('/usage', (req, res) => {
+app.post('/usage', requireToken, (req, res) => {
   // Mescla por janela: um relatório sem a semanal não apaga a semanal anterior.
   const next = readUsage({ ...currentUsage(), ...req.body?.rate_limits });
   if (JSON.stringify(next) !== JSON.stringify(currentUsage())) {
@@ -261,7 +288,7 @@ app.post('/usage', (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/state', (_req, res) => res.json(snapshot()));
+app.get('/api/state', requireToken, (_req, res) => res.json(snapshot()));
 
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
@@ -271,7 +298,14 @@ function broadcast(msg) {
   for (const client of wss.clients) if (client.readyState === 1) client.send(data);
 }
 
-wss.on('connection', (ws) => ws.send(JSON.stringify(snapshot())));
+wss.on('connection', (ws, req) => {
+  const token = new URL(req.url, 'http://x').searchParams.get('token');
+  if (!validToken(token)) {
+    ws.close(4401, 'senha inválida');
+    return;
+  }
+  ws.send(JSON.stringify(snapshot()));
+});
 
 // ---------------------------------------------------------------------------
 // Vida social: agentes ociosos passeiam e conversam com os amigos
@@ -281,6 +315,7 @@ const pick = (list) => list[Math.floor(Math.random() * list.length)];
 
 function socialTick() {
   const now = Date.now();
+  for (const [id, at] of ended) if (now - at > 10 * 60 * 1000) ended.delete(id);
   // Uma janela de uso que reiniciou some das barras.
   const usageBefore = JSON.stringify(usage);
   let changed = JSON.stringify(currentUsage()) !== usageBefore;

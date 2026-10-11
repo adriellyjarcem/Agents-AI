@@ -75,3 +75,41 @@ html, body {
 #empty p { margin: 0; color: var(--muted); font-size: 14px; }
 #empty code { color: var(--text); }
 #usage:not([hidden]) + .conn { margin-left: 0; }
+
+#login {
+  position: fixed;
+  z-index: 20;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(360px, calc(100% - 32px));
+  padding: 20px;
+  background: var(--panel);
+  border-radius: 12px;
+  box-shadow: 0 8px 40px #000a;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+#login[hidden] { display: none; }
+#login h2 { margin: 0; font-size: 18px; }
+#login p { margin: 0; color: var(--muted); font-size: 14px; }
+#login input {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #ffffff2a;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 16px;
+}
+#login button {
+  padding: 10px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--working);
+  color: #10202a;
+  font-weight: 600;
+  font-size: 15px;
+  cursor: pointer;
+}
+#login .erro { color: var(--danger); min-height: 1em; }

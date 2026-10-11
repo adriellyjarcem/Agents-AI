@@ -27,6 +27,13 @@
     <h2>Ninguém no escritório ainda</h2>
     <p>Abra uma sessão do Claude Code (com os hooks instalados) ou rode <code>npm run demo</code>.</p>
   </div>
+  <form id="login" hidden>
+    <h2>🔒 Escritório protegido</h2>
+    <p>Digite a senha do escritório.</p>
+    <input id="senha" type="password" autocomplete="current-password" required />
+    <p id="login-erro" class="erro"></p>
+    <button type="submit">Entrar</button>
+  </form>
   <script src="/vendor/phaser.min.js"></script>
   <script type="module" src="office.js"></script>
 </body>

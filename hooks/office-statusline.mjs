@@ -8,8 +8,8 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { deliver } from './conexao.mjs';
 
-const url = `http://localhost:${process.env.OFFICE_PORT || 4321}/usage`;
 const previousFile = join(dirname(fileURLToPath(import.meta.url)), '..', 'config', 'statusline-anterior.json');
 
 let input = '';
@@ -23,18 +23,7 @@ process.stdin.on('end', async () => {
     // entrada inesperada: segue só com a linha padrão
   }
 
-  if (data.rate_limits) {
-    try {
-      await fetch(url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ rate_limits: data.rate_limits }),
-        signal: AbortSignal.timeout(500),
-      });
-    } catch {
-      // escritório desligado: ignora
-    }
-  }
+  if (data.rate_limits) await deliver('/usage', { rate_limits: data.rate_limits });
 
   process.stdout.write(statusLine(data));
   process.exit(0);

@@ -46,6 +46,51 @@ Rode de novo sempre que atualizar o projeto (`git pull`), para pegar hooks e sub
 Se o servidor estiver desligado, o hook simplesmente não faz nada, e o Claude Code não é afetado.
 A porta pode ser trocada com a variável `OFFICE_PORT` (vale para o servidor e para o hook).
 
+## Versão online (abrir de qualquer lugar, até do celular)
+
+O escritório pode rodar num servidor na internet, protegido por senha. Assim você abre de qualquer
+lugar, e sessões do Claude Code de várias máquinas (inclusive na nuvem, em claude.ai/code) aparecem
+juntas.
+
+**1. Publicar no Render (gratuito)**
+
+1. Crie uma conta em [render.com](https://render.com) entrando com o GitHub.
+2. **New → Blueprint**, escolha este repositório e confirme. O `render.yaml` já configura tudo.
+3. Quando terminar, copie o endereço do serviço (algo como `https://escritorio-virtual-xxxx.onrender.com`)
+   e, em **Environment**, o valor de `OFFICE_TOKEN`: é a senha do escritório.
+4. Abra o endereço e digite a senha. Dica: salve nos favoritos o link
+   `https://SEU-ENDERECO.onrender.com/#senha=SUA_SENHA` e ele entra direto.
+
+No plano gratuito o servidor "dorme" depois de 15 minutos sem uso e leva até 1 minuto para
+acordar. Os hooks mandam os eventos em segundo plano, então o Claude Code nunca fica esperando.
+
+**2. Ligar o seu computador no escritório online**
+
+Na pasta do projeto:
+
+```bash
+npm run install-hooks -- --url https://SEU-ENDERECO.onrender.com --token SUA_SENHA
+```
+
+Para voltar ao escritório local: `npm run install-hooks -- --local`.
+
+**3. Sessões na nuvem (claude.ai/code)**
+
+Para um repositório aparecer quando você trabalha nele pela nuvem, embuta o hook nele e faça commit:
+
+```bash
+npm run install-hooks -- --project CAMINHO/DO/REPOSITORIO --embutir
+cd CAMINHO/DO/REPOSITORIO
+git add .claude && git commit -m "Hooks do escritório virtual" && git push
+```
+
+Depois, no ambiente da nuvem (configurações do ambiente em claude.ai/code), adicione as variáveis
+`OFFICE_URL` (o endereço do Render) e `OFFICE_TOKEN` (a senha). A senha nunca vai para o repositório.
+
+**Privacidade:** online, os hooks mandam só o nome da pasta, nomes de arquivo, padrões de busca, a
+descrição dos comandos e só o *nome do programa* rodado (`git`, `npm`), nunca o comando completo nem o
+conteúdo de arquivos.
+
 ## O time: coordenadores e subagentes
 
 Cada sessão do Claude Code que você abre aparece como um **coordenador** (Ana, Bruno, Júlia, Tiago).
