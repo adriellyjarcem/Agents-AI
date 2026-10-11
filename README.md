@@ -98,11 +98,25 @@ Custo: cada conversa é uma chamada curta ao Haiku, então mesmo no limite de 12
 gasto fica em centavos de dólar por hora. Vale saber que o resumo das ações (nomes de arquivos,
 padrões de busca, descrições de comandos) vai no pedido para a API.
 
+## Visual (tileset)
+
+O escritório usa um tileset de pixel art próprio, desenhado pixel a pixel em
+[`scripts/build-tileset.mjs`](scripts/build-tileset.mjs) e salvo em `public/assets/`:
+
+- `office.png` + `office.json`: móveis, pisos, paredes, plantas e jardim (atlas do Phaser, 16 px por tile, desenhado em 2x).
+- `chars.png`: personagens-modelo com animação de andar em 3 direções, sentado de costas (mesa) e de frente (sofá),
+  em dois estilos de cabelo. As cores-chave são trocadas no navegador pelas cores de cada persona
+  (`pele`, `cabelo`, `camisa`, `calca` e `cabeloLongo` no `personas.json`).
+
+Para mudar algum sprite, edite o script e rode `npm run build-tileset`. Para usar um tileset comprado
+(por exemplo o *Modern Interiors* da LimeZu), gere um atlas com os mesmos nomes de frame
+(`desk`, `chair`, `monitor_on`, `sofa`...) e substitua `office.png`/`office.json`. Os nomes estão no `office.json`.
+
 Controles: arraste para mover a câmera e use a roda do mouse para zoom.
 
 ## Próximos passos
 
 - [x] Conversas geradas pelo Claude Haiku, no estilo de cada personalidade
 - [x] Barras de uso (limite de 5 h e semanal) no topo
-- [ ] Trocar os sprites desenhados por código por um tileset de verdade (ex.: Tiled + LimeZu)
+- [x] Tileset de pixel art com personagens animados
 - [ ] Mostrar subagentes como "estagiários" ao lado do agente principal

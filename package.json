@@ -1,13 +1,14 @@
 {
   "name": "escritorio-virtual",
   "version": "0.1.0",
-  "description": "Escritório virtual em pixel art para acompanhar agentes do Claude Code",
+  "description": "Escrit\u00f3rio virtual em pixel art para acompanhar agentes do Claude Code",
   "main": "server/index.mjs",
   "scripts": {
     "start": "node server/index.mjs",
     "demo": "node scripts/demo.mjs",
     "install-hooks": "node scripts/install-hooks.mjs",
-    "remove-hooks": "node scripts/install-hooks.mjs --remove"
+    "remove-hooks": "node scripts/install-hooks.mjs --remove",
+    "build-tileset": "node scripts/build-tileset.mjs"
   },
   "repository": {
     "type": "git",

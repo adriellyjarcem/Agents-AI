@@ -1,37 +1,25 @@
-// Escritório virtual em Phaser: desenha o mapa (gerado por código, sem
-// assets externos), cria um personagem por agente e move cada um de acordo
-// com o estado que chega do servidor via WebSocket.
+// Escritório virtual em Phaser: monta o mapa com o tileset de pixel art
+// (public/assets, gerado por scripts/build-tileset.mjs), cria um personagem
+// por agente e move cada um de acordo com o estado que chega do servidor.
 
 /* global Phaser */
 
-const T = 32; // tamanho de um "tile"
+const T = 32; // tamanho de um "tile" no mundo (o pixel art de 16 px é desenhado em 2x)
+const PX = 2; // escala do pixel art
 const ROOM_W = 14; // sala em tiles
-const ROOM_H = 10;
+const ROOM_H = 11;
 const HALL_H = 7; // corredor principal (com café, sofá...) no topo
 const CORR_H = 2; // corredor acima de cada fileira extra de salas
 const COLS = 3; // salas por fileira
 const GARDEN_W = 7; // jardim à direita, também serve de passagem vertical
 const SPEED = 130; // px por segundo
 const DESKS_PER_ROOM = 6;
+const AISLE = 2.9 * T; // corredor interno da sala, abaixo dos móveis da parede
+const SOFA = { x: 17.6 * T, y: 2.2 * T };
+const LABEL_DEPTH = 100000;
 
-const C = {
-  hall: [0xf1efe9, 0xe8e6df],
-  room: [0xece4d2, 0xe3dac6],
-  wall: 0x3d4250,
-  grass: [0x7cc36a, 0x72ba60],
-  path: 0xd8ccb0,
-  desk: 0xb07d4f,
-  deskTop: 0xcfa271,
-  chair: 0xb5443c,
-  screenOff: 0x2b2f3a,
-  screenOn: 0x5ec8ff,
-  screenWait: 0xffb74d,
-  pot: 0xc0643b,
-  leaf: [0x3f9a4a, 0x5cb85c],
-  sofa: 0x4a6fb5,
-  wood: 0x8a5a33,
-  books: [0xe57373, 0x64b5f6, 0xffd54f, 0x81c784, 0xba68c8],
-};
+// Quadros da folha de personagens (public/assets/chars.png)
+const FRAME = { down: 0, up: 3, side: 6, sitBack: 9, sitFront: 10 };
 
 const STATUS_COLOR = { working: '#4fc3f7', waiting: '#ffb74d', idle: '#9e9e9e' };
 
@@ -69,13 +57,13 @@ class Layout {
     if (i >= DESKS_PER_ROOM) {
       // Sem mesa livre: fica em pé perto do quadro.
       const k = i - DESKS_PER_ROOM;
-      return { x: room.x + (10 + (k % 3)) * T, y: room.y + 2 * T, laneX: room.x + 9 * T, overflow: true };
+      return { x: room.x + (10 + (k % 3)) * T, y: room.y + AISLE, laneX: room.x + 9 * T, overflow: true };
     }
     const col = i % 3;
     const row = Math.floor(i / 3);
     const x = room.x + (1.5 + col * 4) * T;
-    const y = room.y + (2.8 + row * 3.6) * T;
-    return { deskX: x, deskY: y, x: x + 1.5 * T, y: y + 2.3 * T, laneX: room.x + (1 + col * 4) * T };
+    const y = room.y + (3.6 + row * 3.6) * T;
+    return { deskX: x, deskY: y, x: x + 1.5 * T, y: y + 2.4 * T, laneX: room.x + (1 + col * 4) * T };
   }
 
   spot(name, slot = 0) {
@@ -83,7 +71,7 @@ class Layout {
     switch (name) {
       case 'cafe': return { x: (1.6 + s * 1.6) * T, y: 2.8 * T };
       case 'bebedouro': return { x: (7.6 + s * 1.6) * T, y: 2.8 * T };
-      case 'sofa': return { x: (15.6 + s * 1.6) * T, y: 2.6 * T };
+      case 'sofa': return { x: SOFA.x + ((slot % 3) - 1) * 1.4 * T, y: SOFA.y - 0.25 * T, depth: SOFA.y + 1 };
       case 'estante': return { x: (25.6 + s * 1.6) * T, y: 2.8 * T };
       case 'jardim': return { x: this.hallW + (2.6 + s * 1.6) * T, y: 4.5 * T };
       default: return { x: 2 * T, y: 2.8 * T };
@@ -110,7 +98,7 @@ class Layout {
       const room = this.room(agent.project);
       if (room) {
         const d = this.desk(room, agent.deskIndex);
-        const aisle = room.y + 1.6 * T;
+        const aisle = room.y + AISLE;
         return {
           row: room.r,
           pts: [
@@ -135,7 +123,7 @@ class Layout {
       const room = this.room(agent.project);
       if (room) {
         const d = this.desk(room, agent.deskIndex);
-        const aisle = room.y + 1.6 * T;
+        const aisle = room.y + AISLE;
         return {
           row: room.r,
           pts: [
@@ -169,51 +157,57 @@ class Layout {
 }
 
 // ---------------------------------------------------------------------------
-// Sprites gerados por código
+// Personagens: a folha-modelo usa cores-chave que trocamos pelas da persona
 // ---------------------------------------------------------------------------
 
 const hex = (s) => parseInt(s.replace('#', ''), 16);
 
-// Personagem de 12x18 "pixels", cada pixel com 2px de lado.
-function makeCharacterTextures(scene, persona) {
-  const front = `char-${persona.id}`;
-  if (scene.textures.exists(front)) return front;
-  const P = 2;
-  const skin = hex(persona.pele);
-  const hair = hex(persona.cabelo);
-  const shirt = hex(persona.camisa);
-  const pants = hex(persona.calca);
+function rgb(color, f = 1) {
+  const n = hex(color);
+  return [16, 8, 0].map((shift) => Math.round(((n >> shift) & 255) * f));
+}
 
-  for (const side of ['front', 'back']) {
-    const g = scene.make.graphics({ add: false });
-    const px = (x, y, w, h, color) => {
-      g.fillStyle(color, 1);
-      g.fillRect(x * P, y * P, w * P, h * P);
-    };
-    px(3, 2, 6, 5, skin); // rosto
-    px(3, 0, 6, 2, hair); // cabelo
-    if (side === 'front') {
-      px(2, 1, 1, 3, hair);
-      px(9, 1, 1, 3, hair);
-      px(4, 4, 1, 1, 0x222222); // olhos
-      px(7, 4, 1, 1, 0x222222);
-    } else {
-      px(2, 1, 8, 5, hair);
-    }
-    px(2, 7, 8, 6, shirt); // tronco
-    px(1, 8, 1, 3, shirt); // braços
-    px(10, 8, 1, 3, shirt);
-    px(1, 11, 1, 1, skin); // mãos
-    px(10, 11, 1, 1, skin);
-    px(3, 13, 6, 2, pants); // pernas
-    px(3, 15, 2, 2, pants);
-    px(7, 15, 2, 2, pants);
-    px(3, 17, 2, 1, 0x333333); // sapatos
-    px(7, 17, 2, 1, 0x333333);
-    g.generateTexture(side === 'front' ? front : `${front}-back`, 12 * P, 18 * P);
-    g.destroy();
+function makeCharacterTexture(scene, persona) {
+  const key = `char-${persona.id}`;
+  if (scene.textures.exists(key)) return key;
+
+  const swap = new Map([
+    [0xff00ff, rgb(persona.cabelo)],
+    [0xc000c0, rgb(persona.cabelo, 0.75)],
+    [0x00ffff, rgb(persona.pele)],
+    [0x00c0c0, rgb(persona.pele, 0.85)],
+    [0xffff00, rgb(persona.camisa)],
+    [0xc0c000, rgb(persona.camisa, 0.75)],
+    [0x00ff00, rgb(persona.calca)],
+    [0x00c000, rgb(persona.calca, 0.75)],
+  ]);
+
+  const src = scene.textures.get('chars').getSourceImage();
+  const canvas = document.createElement('canvas');
+  canvas.width = src.width;
+  canvas.height = 24;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(src, 0, persona.cabeloLongo ? 24 : 0, src.width, 24, 0, 0, src.width, 24);
+  const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const to = swap.get((img.data[i] << 16) | (img.data[i + 1] << 8) | img.data[i + 2]);
+    if (to && img.data[i + 3]) img.data.set(to, i);
   }
-  return front;
+  ctx.putImageData(img, 0, 0);
+
+  const tex = scene.textures.addCanvas(key, canvas);
+  for (let i = 0; i < src.width / 16; i++) tex.add(i, 0, i * 16, 0, 16, 24);
+  tex.setFilter(Phaser.Textures.FilterMode.NEAREST);
+
+  for (const [dir, first] of Object.entries({ down: FRAME.down, up: FRAME.up, side: FRAME.side })) {
+    scene.anims.create({
+      key: `${key}-${dir}`,
+      frames: [first + 1, first, first + 2, first].map((frame) => ({ key, frame })),
+      frameRate: 8,
+      repeat: -1,
+    });
+  }
+  return key;
 }
 
 // ---------------------------------------------------------------------------
@@ -264,16 +258,28 @@ class OfficeScene extends Phaser.Scene {
     this.monitors = new Map();
     this.hangouts = new Map();
     this.layout = null;
-    this.worldLayer = null;
+    this.worldObjects = [];
+    this.allViews = new Set(); // inclui quem está indo embora
+  }
+
+  preload() {
+    this.load.atlas('office', 'assets/office.png', 'assets/office.json');
+    this.load.image('chars', 'assets/chars.png');
   }
 
   create() {
+    // Pixel art: amplia sem borrar.
+    this.textures.get('office').setFilter(Phaser.Textures.FilterMode.NEAREST);
     this.cameras.main.setBackgroundColor('#1e2129');
     this.setupCameraControls();
     this.scale.on('resize', () => this.fitCamera());
     this.connect();
     // Atualiza o "reinicia em..." mesmo sem novidades do servidor.
     this.time.addEvent({ delay: 30000, loop: true, callback: () => renderUsage(this.usage ?? {}) });
+  }
+
+  update() {
+    for (const v of this.allViews) v.label.setPosition(v.sprite.x, v.sprite.y);
   }
 
   // --- conexão --------------------------------------------------------------
@@ -328,97 +334,115 @@ class OfficeScene extends Phaser.Scene {
 
   // --- desenho do mapa ------------------------------------------------------
 
+  // Um objeto do tileset com a base em (x, y). A profundidade segue o y, então
+  // o que está mais "para baixo" na tela aparece na frente (inclusive agentes).
+  prop(frame, x, y, depth = y) {
+    const img = this.add.image(x, y, 'office', frame).setOrigin(0.5, 1).setScale(PX).setDepth(depth);
+    this.worldObjects.push(img);
+    return img;
+  }
+
+  // Área coberta repetindo um tile (pisos, paredes, grama).
+  fill(frame, x, y, w, h, depth = -10000) {
+    const t = this.add.tileSprite(x, y, w, h, 'office', frame).setOrigin(0).setTileScale(PX).setDepth(depth);
+    this.worldObjects.push(t);
+    return t;
+  }
+
   drawWorld() {
-    this.worldLayer?.destroy();
+    for (const o of this.worldObjects) o.destroy();
+    this.worldObjects = [];
     this.monitors.clear();
     const L = this.layout;
-    const layer = this.add.container(0, 0);
-    this.worldLayer = layer;
-    const g = this.add.graphics();
-    layer.add(g);
 
-    const checker = (x0, y0, w, h, colors) => {
-      for (let y = 0; y < h; y += T) {
-        for (let x = 0; x < w; x += T) {
-          g.fillStyle(colors[((x + y) / T) % 2], 1);
-          g.fillRect(x0 + x, y0 + y, Math.min(T, w - x), Math.min(T, h - y));
-        }
-      }
-    };
+    // Pisos e parede do corredor principal
+    this.fill('floor_hall', 0, 0, L.hallW, HALL_H * T);
+    for (let r = 1; r < L.rows; r++) this.fill('floor_hall', 0, L.rowTop(r) - CORR_H * T, L.hallW, CORR_H * T);
+    this.fill('wall', 0, 0, L.hallW, 0.4 * T, -8000);
 
-    // Corredor principal + corredores entre fileiras
-    checker(0, 0, L.hallW, HALL_H * T, C.hall);
-    for (let r = 1; r < L.rows; r++) checker(0, L.rowTop(r) - CORR_H * T, L.hallW, CORR_H * T, C.hall);
-    g.fillStyle(C.wall, 1);
-    g.fillRect(0, 0, L.hallW, 6);
+    // Jardim; a trilha também liga as fileiras de salas
+    this.fill('grass', L.hallW, 0, GARDEN_W * T, L.height);
+    this.fill('path', L.gardenX - T / 2, 0, T, L.height, -9500);
+    let seed = 7;
+    const rnd = () => (seed = (seed * 9301 + 49297) % 233280) / 233280;
+    for (let i = 0; i < (L.height / T) * 2; i++) {
+      const x = L.hallW + (2 + Math.floor(rnd() * 5)) * T;
+      const y = Math.floor(rnd() * (L.height / T)) * T;
+      this.fill('grass_alt', x, y, T, T, -9600);
+    }
+    this.prop('umbrella', L.hallW + 4.3 * T, 3.9 * T);
+    this.prop('bench', L.hallW + 4.6 * T, 6.6 * T);
+    this.prop('bush', L.hallW + 6.3 * T, 1.2 * T);
+    this.prop('lamp', L.hallW + 0.55 * T, 3 * T);
+    for (let y = 10; y < L.height / T - 1; y += 5) {
+      this.prop('tree', L.hallW + (4.2 + ((y / 5) % 2) * 1.2) * T, y * T);
+      this.prop('lamp', L.hallW + 0.55 * T, (y + 1.5) * T);
+      this.prop('bush', L.hallW + 3 * T, (y + 2.6) * T);
+    }
 
-    // Jardim
-    checker(L.hallW, 0, GARDEN_W * T, L.height, C.grass);
-    g.fillStyle(C.path, 1);
-    g.fillRect(L.gardenX - T * 0.5, 0, T, L.height);
-    this.drawTree(g, L.hallW + 5.5 * T, 2.2 * T);
-    this.drawUmbrella(g, L.hallW + 4.6 * T, 3.6 * T);
-    for (let y = 9; y < L.height / T - 1; y += 5) this.drawTree(g, L.hallW + 4.5 * T + ((y * 7) % 3) * T, y * T);
+    // Corredor principal: copa, bebedouro, sala de estar, estante
+    this.prop('counter', 2.6 * T, 2 * T);
+    this.prop('coffee_machine', 2.1 * T, 1.45 * T, 2 * T + 1);
+    this.prop('cups', 3.4 * T, 1.1 * T, 2 * T + 1);
+    this.prop('plant_tall', 5.2 * T, 2.2 * T);
+    this.prop('water_cooler', 7.6 * T, 2.3 * T);
+    this.prop('plant', 13.6 * T, 1.9 * T);
+    this.prop('rug', SOFA.x, 4.6 * T, -9000);
+    this.prop('sofa', SOFA.x, SOFA.y);
+    this.prop('coffee_table', SOFA.x, 3.9 * T);
+    this.prop('pouf_yellow', SOFA.x - 2.4 * T, 4.1 * T);
+    this.prop('pouf_red', SOFA.x + 2.4 * T, 4.1 * T);
+    this.prop('plant', 21.6 * T, 1.9 * T);
+    this.prop('clock', 23.6 * T, 1.0 * T, -7000);
+    this.prop('bookshelf', 26.2 * T, 2.3 * T);
+    this.prop('plant', 28.4 * T, 1.9 * T);
+    this.prop('printer', 31.2 * T, 1.9 * T);
+    this.prop('cabinet', 33.4 * T, 2.1 * T);
+    this.prop('bin', 34.8 * T, 2 * T);
+    this.prop('plant_tall', 39.5 * T, 2.2 * T);
 
-    // Pontos de encontro do corredor
-    this.drawCoffee(g, 2 * T, 0.4 * T);
-    this.drawWaterCooler(g, 8 * T, 0.4 * T);
-    this.drawSofa(g, 15 * T, 0.6 * T);
-    this.drawBookshelf(g, 25.4 * T, 0.2 * T);
-    [5, 12, 21, 31, 37].forEach((x) => this.drawPlant(g, x * T, 1.2 * T));
-    this.addLabel(layer, 2.9 * T, 1.75 * T, 'café');
-    this.addLabel(layer, 8 * T, 1.75 * T, 'bebedouro');
-    this.addLabel(layer, 26.5 * T, 1.75 * T, 'estante');
-    this.addLabel(layer, L.hallW + 4.5 * T, 5.4 * T, 'jardim');
-
-    // Salas
-    for (const project of L.projects) this.drawRoom(g, layer, L.room(project), project);
-
-    layer.setDepth(0);
+    for (const project of L.projects) this.drawRoom(L.room(project), project);
     this.fitCamera();
   }
 
-  drawRoom(g, layer, room, project) {
+  drawRoom(room, project) {
     const w = ROOM_W * T;
     const h = ROOM_H * T;
-    g.fillStyle(C.room[0], 1);
-    g.fillRect(room.x, room.y, w, h);
-    g.fillStyle(C.room[1], 1);
-    for (let y = 0; y < h; y += T * 2) g.fillRect(room.x, room.y + y, w, T);
+    const t = 0.3 * T;
+    this.fill('floor_room', room.x, room.y, w, h);
 
-    // Paredes, com porta no meio da parede de cima
-    const t = 6;
-    g.fillStyle(C.wall, 1);
-    g.fillRect(room.x, room.y, room.doorX - T - room.x, t);
-    g.fillRect(room.doorX + T, room.y, room.x + w - room.doorX - T, t);
-    g.fillRect(room.x, room.y + h - t, w, t);
-    g.fillRect(room.x, room.y, t, h);
-    g.fillRect(room.x + w - t, room.y, t, h);
+    // Paredes, com a porta no meio da parede de cima
+    this.fill('wall', room.x, room.y, room.doorX - T - room.x, t, -8000);
+    this.fill('wall', room.doorX + T, room.y, room.x + w - room.doorX - T, t, -8000);
+    this.fill('wall', room.x, room.y + h - t, w, t, -8000);
+    this.fill('wall', room.x, room.y, t, h, -8000);
+    this.fill('wall', room.x + w - t, room.y, t, h, -8000);
 
-    // Decoração
-    this.drawBookshelf(g, room.x + 0.5 * T, room.y + 0.3 * T);
-    this.drawWhiteboard(g, room.x + 10 * T, room.y + 0.3 * T);
-    this.drawPlant(g, room.x + 12.8 * T, room.y + 8.6 * T);
-    this.drawPlant(g, room.x + 0.8 * T, room.y + 8.6 * T);
+    // Encostados na parede de cima, sem invadir o corredor interno da sala
+    this.prop('bookshelf', room.x + 1.6 * T, room.y + 2.4 * T);
+    this.prop('cabinet', room.x + 3.6 * T, room.y + 2.3 * T);
+    this.prop('clock', room.doorX + 2 * T, room.y + 1.2 * T, -7000);
+    this.prop('whiteboard', room.x + 11 * T, room.y + 2 * T);
+    this.prop('plant', room.x + 13.1 * T, room.y + 2.4 * T);
+    this.prop('plant', room.x + 0.9 * T, room.y + 10.6 * T);
+    this.prop('plant_tall', room.x + 13.1 * T, room.y + 10.6 * T);
+    this.prop('bin', room.x + 9.5 * T, room.y + 10.5 * T);
 
-    // Mesas
     for (let i = 0; i < DESKS_PER_ROOM; i++) {
       const d = this.layout.desk(room, i);
-      g.fillStyle(C.desk, 1);
-      g.fillRect(d.deskX, d.deskY, 3 * T, 1.3 * T);
-      g.fillStyle(C.deskTop, 1);
-      g.fillRect(d.deskX + 3, d.deskY + 3, 3 * T - 6, 1.3 * T - 10);
-      g.fillStyle(C.chair, 1);
-      g.fillRoundedRect(d.x - 0.4 * T, d.y - 0.75 * T, 0.8 * T, 0.7 * T, 4);
-      const frame = this.add.rectangle(d.deskX + 1.5 * T, d.deskY + 0.45 * T, 1.3 * T, 0.75 * T, 0x1b1d23);
-      const screen = this.add.rectangle(d.deskX + 1.5 * T, d.deskY + 0.45 * T, 1.3 * T - 6, 0.75 * T - 6, C.screenOff);
-      layer.add([frame, screen]);
-      this.monitors.set(`${project}:${i}`, screen);
+      const cx = d.deskX + 1.5 * T;
+      const base = d.deskY + 1.75 * T;
+      this.prop('desk', cx, base);
+      this.monitors.set(`${project}:${i}`, this.prop('monitor_off', cx, d.deskY + 1.15 * T, base + 1));
+      this.prop('keyboard', cx, d.deskY + 1.45 * T, base + 1);
+      if (i % 2 === 0) this.prop('mug', cx + 1.1 * T, d.deskY + 1.3 * T, base + 1);
+      // A cadeira fica logo atrás de quem senta (que aparece de costas sobre ela).
+      this.prop('chair', d.x, d.y + 0.55 * T, d.y - 1);
     }
 
     // Placa com o nome do projeto, acima da porta
     const sign = this.add
-      .text(room.doorX - 1.3 * T, room.y - 4, project, {
+      .text(room.doorX - 1.2 * T, room.y - 4, project, {
         fontFamily: 'monospace',
         fontSize: '13px',
         color: '#2b2f3a',
@@ -426,103 +450,17 @@ class OfficeScene extends Phaser.Scene {
         padding: { x: 6, y: 2 },
         resolution: 2,
       })
-      .setOrigin(1, 1);
-    layer.add(sign);
-  }
-
-  addLabel(layer, x, y, text) {
-    layer.add(
-      this.add
-        .text(x, y, text, { fontSize: '10px', color: '#8a867a', resolution: 2 })
-        .setOrigin(0.5, 0),
-    );
-  }
-
-  drawPlant(g, x, y) {
-    g.fillStyle(C.pot, 1);
-    g.fillRect(x - 8, y + 6, 16, 12);
-    g.fillStyle(C.leaf[0], 1);
-    g.fillCircle(x, y - 2, 11);
-    g.fillStyle(C.leaf[1], 1);
-    g.fillCircle(x - 5, y - 6, 6);
-    g.fillCircle(x + 6, y + 1, 5);
-  }
-
-  drawTree(g, x, y) {
-    g.fillStyle(0x7a4f2c, 1);
-    g.fillRect(x - 5, y, 10, 22);
-    g.fillStyle(0x3f8f3a, 1);
-    g.fillCircle(x, y - 6, 22);
-    g.fillStyle(0x58a84f, 1);
-    g.fillCircle(x - 8, y - 12, 11);
-  }
-
-  drawUmbrella(g, x, y) {
-    g.fillStyle(0xc9a26b, 1);
-    g.fillRect(x - 2.5 * T, y - 0.4 * T, 2.4 * T, 1.6 * T);
-    g.fillStyle(0xe53935, 1);
-    g.fillCircle(x - 1.3 * T, y - 0.2 * T, 16);
-    g.fillStyle(0xffffff, 1);
-    g.fillCircle(x - 1.3 * T, y - 0.2 * T, 6);
-  }
-
-  drawCoffee(g, x, y) {
-    g.fillStyle(C.wood, 1);
-    g.fillRect(x - 6, y + 10, 2 * T, 0.9 * T);
-    g.fillStyle(0x37474f, 1);
-    g.fillRect(x + 4, y, 20, 22);
-    g.fillStyle(0xd84315, 1);
-    g.fillRect(x + 8, y + 4, 12, 5);
-    g.fillStyle(0xffffff, 1);
-    g.fillRect(x + 32, y + 14, 8, 8);
-  }
-
-  drawWaterCooler(g, x, y) {
-    g.fillStyle(0xeceff1, 1);
-    g.fillRect(x - 10, y + 12, 20, 28);
-    g.fillStyle(0x4fc3f7, 1);
-    g.fillRoundedRect(x - 8, y - 4, 16, 18, 4);
-  }
-
-  drawSofa(g, x, y) {
-    g.fillStyle(C.sofa, 1);
-    g.fillRoundedRect(x, y, 5 * T, 0.8 * T, 6);
-    g.fillRoundedRect(x - 0.3 * T, y + 0.2 * T, 0.6 * T, 1.2 * T, 6);
-    g.fillRoundedRect(x + 4.7 * T, y + 0.2 * T, 0.6 * T, 1.2 * T, 6);
-    g.fillStyle(0x5d83c9, 1);
-    g.fillRoundedRect(x + 0.3 * T, y + 0.6 * T, 4.4 * T, 0.7 * T, 4);
-    g.fillStyle(0x6d4c41, 1);
-    g.fillRect(x + 1.2 * T, y + 2.6 * T, 2.6 * T, 0.8 * T);
-  }
-
-  drawBookshelf(g, x, y) {
-    g.fillStyle(C.wood, 1);
-    g.fillRect(x, y, 2.2 * T, 1.1 * T);
-    for (let shelf = 0; shelf < 2; shelf++) {
-      for (let b = 0; b < 8; b++) {
-        g.fillStyle(C.books[(b + shelf * 3) % C.books.length], 1);
-        g.fillRect(x + 4 + b * 8, y + 4 + shelf * 15, 6, 12);
-      }
-    }
-  }
-
-  drawWhiteboard(g, x, y) {
-    g.fillStyle(0x90a4ae, 1);
-    g.fillRect(x, y, 3 * T, 1 * T);
-    g.fillStyle(0xffffff, 1);
-    g.fillRect(x + 3, y + 3, 3 * T - 6, 1 * T - 6);
-    g.lineStyle(2, 0x42a5f5, 1);
-    g.lineBetween(x + 10, y + 12, x + 50, y + 12);
-    g.lineStyle(2, 0xef5350, 1);
-    g.lineBetween(x + 10, y + 20, x + 70, y + 20);
+      .setOrigin(1, 1)
+      .setDepth(-7000);
+    this.worldObjects.push(sign);
   }
 
   // --- agentes --------------------------------------------------------------
 
   createAgent(data) {
-    const key = makeCharacterTextures(this, data.persona);
+    const key = makeCharacterTexture(this, data.persona);
     const start = this.layout.spawn();
-    const sprite = this.add.image(0, 0, key).setOrigin(0.5, 1);
+    const sprite = this.add.sprite(start.x, start.y, key, FRAME.down).setOrigin(0.5, 1).setScale(PX);
     const dot = this.add.circle(0, 0, 4, 0x9e9e9e).setStrokeStyle(1, 0x000000, 0.4);
     const name = this.add
       .text(0, 4, data.nome, {
@@ -534,7 +472,7 @@ class OfficeScene extends Phaser.Scene {
       })
       .setOrigin(0.5, 0);
     const bubble = this.add
-      .text(0, -42, '', {
+      .text(0, -50, '', {
         fontSize: '11px',
         color: '#222222',
         backgroundColor: '#ffffff',
@@ -545,12 +483,14 @@ class OfficeScene extends Phaser.Scene {
       })
       .setOrigin(0.5, 1)
       .setVisible(false);
-    const container = this.add.container(start.x, start.y, [sprite, name, dot, bubble]);
+    // Nome e balão ficam numa camada acima de tudo, seguindo o personagem.
+    const label = this.add.container(start.x, start.y, [name, dot, bubble]).setDepth(LABEL_DEPTH);
 
     const view = {
       data,
-      container,
+      key,
       sprite,
+      label,
       name,
       dot,
       bubble,
@@ -560,7 +500,8 @@ class OfficeScene extends Phaser.Scene {
       chatUntil: 0,
     };
     this.views.set(data.id, view);
-    container.setDepth(1000 + container.y);
+    this.allViews.add(view);
+    sprite.setDepth(start.y);
     return view;
   }
 
@@ -586,31 +527,31 @@ class OfficeScene extends Phaser.Scene {
       view.pending = loc;
       return;
     }
-    const pos = { x: view.container.x, y: view.container.y };
-    const pts = this.layout.path(view.loc, view.data, pos, loc);
+    const { sprite } = view;
+    const pts = this.layout.path(view.loc, view.data, { x: sprite.x, y: sprite.y }, loc);
     view.loc = loc;
     view.moving = true;
-    this.setSitting(view, false);
 
-    const walk = this.tweens.add({ targets: view.sprite, y: -3, duration: 140, yoyo: true, repeat: -1 });
     const step = () => {
       const next = pts.shift();
       if (!next) {
-        walk.stop();
-        view.sprite.y = 0;
         view.moving = false;
         this.onArrive(view);
         return;
       }
-      const dist = Phaser.Math.Distance.Between(view.container.x, view.container.y, next.x, next.y);
+      const dx = next.x - sprite.x;
+      const dy = next.y - sprite.y;
+      const dist = Math.hypot(dx, dy);
       if (dist < 1) return step();
-      view.sprite.setFlipX(next.x < view.container.x);
+      // Anima andando na direção do próximo trecho.
+      const dir = Math.abs(dx) > Math.abs(dy) ? 'side' : dy < 0 ? 'up' : 'down';
+      sprite.setFlipX(dir === 'side' && dx < 0).play(`${view.key}-${dir}`, true);
       view.tween = this.tweens.add({
-        targets: view.container,
+        targets: sprite,
         x: next.x,
         y: next.y,
         duration: (dist / SPEED) * 1000,
-        onUpdate: () => view.container.setDepth(1000 + view.container.y),
+        onUpdate: () => sprite.setDepth(sprite.y),
         onComplete: step,
       });
     };
@@ -618,8 +559,18 @@ class OfficeScene extends Phaser.Scene {
   }
 
   onArrive(view) {
+    view.sprite.stop();
     if (view.leaving) {
-      view.container.destroy();
+      this.tweens.add({
+        targets: [view.sprite, view.label],
+        alpha: 0,
+        duration: 400,
+        onComplete: () => {
+          view.sprite.destroy();
+          view.label.destroy();
+          this.allViews.delete(view);
+        },
+      });
       return;
     }
     if (view.pending) {
@@ -628,23 +579,30 @@ class OfficeScene extends Phaser.Scene {
       this.goTo(view, next);
       return;
     }
-    this.setSitting(view, view.loc.kind === 'desk' || (view.loc.kind === 'spot' && view.loc.spot === 'sofa'));
+    this.pose(view);
     this.refreshMonitors();
   }
 
-  setSitting(view, sitting) {
-    view.sitting = sitting;
-    const key = `char-${view.data.persona.id}`;
-    const atDesk = sitting && view.loc.kind === 'desk' && !this.layout.locPos(view.loc, view.data).overflow;
-    view.sprite.setTexture(atDesk ? `${key}-back` : key);
-    if (sitting) view.sprite.setCrop(0, 0, 24, 28).setY(8);
-    else view.sprite.setCrop().setY(0);
+  // Postura parada: sentado na mesa (de costas), no sofá (de frente) ou em pé.
+  pose(view) {
+    const { sprite, loc } = view;
+    const pos = this.layout.locPos(loc, view.data);
+    sprite.setFlipX(false).setDepth(pos.depth ?? sprite.y);
+    if (loc.kind === 'desk' && !pos.overflow) sprite.setFrame(FRAME.sitBack);
+    else if (loc.kind === 'spot' && loc.spot === 'sofa') sprite.setFrame(FRAME.sitFront);
+    else if (loc.kind === 'spot' && loc.spot !== 'jardim') sprite.setFrame(FRAME.up); // de frente para o café, a estante...
+    else sprite.setFrame(FRAME.down);
+  }
+
+  // Vira um agente para o outro (usado nas conversas).
+  face(view, other) {
+    if (view.moving || (view.loc.kind === 'spot' && view.loc.spot === 'sofa')) return;
+    view.sprite.setFrame(FRAME.side).setFlipX(other.sprite.x < view.sprite.x);
   }
 
   // Coloca o agente direto no destino (usado quando o mapa é redesenhado).
   snap(view) {
     view.tween?.stop();
-    this.tweens.killTweensOf(view.sprite);
     view.moving = false;
     if (view.pending) {
       view.loc = view.pending;
@@ -652,8 +610,7 @@ class OfficeScene extends Phaser.Scene {
     }
     if (view.loc.kind === 'spawn') view.loc = { kind: 'desk' };
     const p = this.layout.locPos(view.loc, view.data);
-    view.container.setPosition(p.x, p.y).setDepth(1000 + p.y);
-    view.sprite.y = 0;
+    view.sprite.setPosition(p.x, p.y);
     this.onArrive(view);
   }
 
@@ -664,40 +621,26 @@ class OfficeScene extends Phaser.Scene {
     view.bubble.setText('Tchau! 👋').setVisible(true);
     if (view.moving) {
       view.tween?.stop();
-      this.tweens.killTweensOf(view.sprite);
       view.moving = false;
     }
-    const pos = { x: view.container.x, y: view.container.y };
-    const pts = this.layout.path(view.loc, view.data, pos, { kind: 'spawn' });
-    const last = pts[pts.length - 1];
-    this.tweens.chain({
-      targets: view.container,
-      tweens: [
-        ...pts.map((p, i) => ({
-          x: p.x,
-          y: p.y,
-          duration: (Phaser.Math.Distance.BetweenPoints(i ? pts[i - 1] : pos, p) / SPEED) * 1000 + 1,
-        })),
-        { x: last.x - T, alpha: 0, duration: 400 },
-      ],
-      onComplete: () => view.container.destroy(),
-    });
+    this.goTo(view, { kind: 'spawn' });
   }
 
   refreshMonitors() {
-    for (const screen of this.monitors.values()) screen.setFillStyle(C.screenOff);
+    for (const screen of this.monitors.values()) screen.setFrame('monitor_off');
     for (const view of this.views.values()) {
       const { data } = view;
       if (view.moving || view.loc.kind !== 'desk' || data.status === 'idle') continue;
       const screen = this.monitors.get(`${data.project}:${data.deskIndex}`);
-      screen?.setFillStyle(data.status === 'waiting' ? C.screenWait : C.screenOn);
+      screen?.setFrame(data.status === 'waiting' ? 'monitor_wait' : 'monitor_on');
     }
   }
 
   freeSlot(spot, except) {
     const taken = new Set();
     for (const v of this.views.values()) {
-      if (v !== except && v.loc.kind === 'spot' && v.loc.spot === spot) taken.add(v.loc.slot);
+      const loc = v.pending ?? v.loc; // quem ainda está a caminho também ocupa a vaga
+      if (v !== except && loc.kind === 'spot' && loc.spot === spot) taken.add(loc.slot);
     }
     let slot = 0;
     while (taken.has(slot)) slot++;
@@ -763,6 +706,8 @@ class OfficeScene extends Phaser.Scene {
         if (!ready && waited < 25000) return;
         check.remove();
         this.hangouts.delete(msg.id);
+        this.face(views[0], views[1]);
+        this.face(views[1], views[0]);
         let at = 0;
         for (const line of hangout.lines ?? []) {
           const ms = Math.min(6000, 2200 + line.text.length * 45);
@@ -792,7 +737,8 @@ class OfficeScene extends Phaser.Scene {
   }
 }
 
-new Phaser.Game({
+// Exposto no console (window.office) para depuração.
+window.office = new Phaser.Game({
   type: Phaser.AUTO,
   parent: 'game',
   backgroundColor: '#1e2129',

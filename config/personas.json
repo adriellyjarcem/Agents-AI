@@ -20,6 +20,7 @@
   {
     "id": "maite",
     "nome": "Maitê",
+    "cabeloLongo": true,
     "pele": "#6b4430", "cabelo": "#2a1a10", "camisa": "#d9534f", "calca": "#3a3a46",
     "personalidade": "Criativa, pensa primeiro no usuário.",
     "gosta": ["sofa", "jardim"],
@@ -29,6 +30,7 @@
   {
     "id": "camila",
     "nome": "Camila",
+    "cabeloLongo": true,
     "pele": "#f1c9a5", "cabelo": "#b5651d", "camisa": "#6abf69", "calca": "#2d3e50",
     "personalidade": "Calma, organizada, sempre com uma lista de tarefas.",
     "gosta": ["bebedouro", "sofa"],
@@ -47,6 +49,7 @@
   {
     "id": "vitoria",
     "nome": "Vitória",
+    "cabeloLongo": true,
     "pele": "#a8714f", "cabelo": "#111111", "camisa": "#ff8a65", "calca": "#37474f",
     "personalidade": "Competitiva, adora bater metas de performance.",
     "gosta": ["jardim", "bebedouro"],
@@ -83,6 +86,7 @@
   {
     "id": "helena",
     "nome": "Helena",
+    "cabeloLongo": true,
     "pele": "#f3d2b5", "cabelo": "#4e342e", "camisa": "#ab47bc", "calca": "#3e2723",
     "personalidade": "Didática, adora explicar e documentar.",
     "gosta": ["estante", "sofa"],

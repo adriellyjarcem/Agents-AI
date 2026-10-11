@@ -167,6 +167,7 @@ function publicAgent(a) {
       cabelo: a.persona.cabelo,
       camisa: a.persona.camisa,
       calca: a.persona.calca,
+      cabeloLongo: Boolean(a.persona.cabeloLongo),
       personalidade: a.persona.personalidade,
     },
   };
