@@ -1,0 +1,11 @@
+const {chromium}=require('playwright'),fs=require('fs');
+const spec=JSON.parse(fs.readFileSync(__dirname+'/deneb_spec_fluxos.json'));
+const rows=fs.readFileSync(__dirname+'/base_ficticia.csv','utf8').trim().split('\n');const h=rows.shift().split(';');
+spec.data[0].values=rows.map(r=>{const c=r.split(';');const o={};h.forEach((k,i)=>o[k]=i>0&&i!=3?+c[i]:c[i]);return o;});
+spec.width=+process.argv[2]||700;spec.height=+process.argv[3]||560;
+(async()=>{const b=await chromium.launch();const p=await b.newPage({viewport:{width:spec.width,height:spec.height},deviceScaleFactor:2});
+const errs=[];p.on('pageerror',e=>errs.push(e.message));p.on('console',m=>{if(m.type()=='error'||m.type()=='warning')errs.push(m.text())});
+await p.setContent('<body style="margin:0;font-family:Segoe UI,Arial"><div id=v></div></body>');
+await p.addScriptTag({path:require.resolve('vega/build/vega.min.js')});
+await p.evaluate(async s=>{await new vega.View(vega.parse(s),{renderer:'svg',container:'#v'}).runAsync()},spec);
+await p.screenshot({path:process.argv[4]});console.log('erros:',errs);await b.close();})();
