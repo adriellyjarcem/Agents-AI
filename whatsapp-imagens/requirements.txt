@@ -1,0 +1,4 @@
+openpyxl>=3.1
+pillow>=10.0
+# Opcional, só para --ocr (precisa também do programa Tesseract-OCR instalado):
+# pytesseract>=0.3.10
