@@ -1,34 +1,44 @@
 #!/usr/bin/env python3
 """
-Coleta as imagens de um grupo do WhatsApp e lança as informações numa planilha Excel.
+Lê os "Informe Estoque Visual" enviados como imagem num grupo do WhatsApp e lança
+os números numa planilha Excel.
 
-Funciona a partir da exportação oficial da conversa (WhatsApp > grupo > Mais >
-Exportar conversa > "Incluir mídia"), que gera um .zip com o _chat.txt/"Conversa do
-WhatsApp com ....txt" e os arquivos de mídia. Aceita tanto o .zip quanto a pasta já
-extraída, e exportações feitas no Android ou no iPhone, em português ou inglês.
+Entrada: a exportação oficial do grupo (WhatsApp > grupo > Mais > Exportar conversa >
+"Incluir mídia"). Aceita o .zip, a pasta extraída, ou uma pasta com várias exportações
+(de vários grupos): use --grupo para escolher qual grupo processar.
 
-Para cada imagem encontrada, a planilha recebe:
-  Data | Hora | Remetente | Arquivo | Legenda | Largura | Altura | Tamanho (KB) |
-  Hash (SHA-256) | Texto da imagem (OCR, opcional) | Link para o arquivo | Miniatura (opcional)
+Cada imagem é lida pelo Claude (API da Anthropic), que devolve os campos do informe em
+JSON. Imagens que não são um informe de estoque (fotos, prints etc.) são ignoradas.
 
-Rodar de novo com uma exportação mais nova só acrescenta as imagens que ainda não
-estão na planilha (a comparação é pelo hash do arquivo).
+A planilha recebe as abas:
+  Resumo   uma linha por informe: data, unidade, totais, D-1, expedição, sucatas,
+           conferência das somas, e quem enviou / quando / link da imagem
+  Detalhe  uma linha por item das tabelas "Tamborado/Grelhado" e "A Tamborar"
+           (os itens variam de unidade para unidade)
+  Ignoradas imagens do grupo que não eram informe (para não lê-las de novo)
+
+Rodar de novo só acrescenta as imagens que ainda não estão na planilha.
 
 Uso:
-    python coletar_imagens.py "WhatsApp Chat - Grupo.zip"
-    python coletar_imagens.py pasta_extraida --planilha imagens.xlsx --miniaturas
-    python coletar_imagens.py export.zip --desde 01/10/2026 --remetente "Maria"
-    python coletar_imagens.py export.zip --ocr        # requer pytesseract + Tesseract
+    python coletar_imagens.py exportacoes/ --grupo "Estoque Gusa"
+    python coletar_imagens.py "WhatsApp Chat - Estoque Gusa.zip" --planilha estoque.xlsx
+    python coletar_imagens.py export.zip --desde 01/11/2026
+
+Requer a variável de ambiente ANTHROPIC_API_KEY (ou login com `ant auth login`).
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
+import io
+import json
 import re
 import shutil
 import sys
 import tempfile
+import unicodedata
 import zipfile
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -43,46 +53,208 @@ except ImportError:  # pragma: no cover
 
 try:
     from PIL import Image as PILImage
-except ImportError:  # Pillow é opcional, mas sem ela não há dimensões nem miniaturas
+except ImportError:
     PILImage = None
 
+MODELO_PADRAO = "claude-opus-5-5"
 EXTENSOES_IMAGEM = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".bmp"}
+TIPOS_ACEITOS_API = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+                     ".webp": "image/webp", ".gif": "image/gif"}
+LIMITE_BYTES_API = 4_500_000
 
-# Caracteres invisíveis que o WhatsApp coloca nas exportações (marcas de direção etc.)
 INVISIVEIS = dict.fromkeys(map(ord, "‎‏‪‫‬‭‮﻿"), None)
 
-# Android: "05/11/2026 14:32 - Fulano: mensagem"  (também "05/11/26, 2:32 PM - ...")
 RE_ANDROID = re.compile(
     r"^(?P<data>\d{1,2}/\d{1,2}/\d{2,4}),?\s+(?P<hora>\d{1,2}:\d{2}(?::\d{2})?(?:\s?[APap]\.?\s?[Mm]\.?)?)"
     r"\s+-\s+(?P<resto>.*)$"
 )
-# iPhone: "[05/11/2026, 14:32:10] Fulano: mensagem"
 RE_IOS = re.compile(
     r"^\[(?P<data>\d{1,2}/\d{1,2}/\d{2,4}),?\s+(?P<hora>\d{1,2}:\d{2}(?::\d{2})?(?:\s?[APap]\.?\s?[Mm]\.?)?)\]"
     r"\s+(?P<resto>.*)$"
 )
-# Referências a anexos dentro do texto da mensagem
 RE_ANEXO_ANDROID = re.compile(
     r"(?P<arquivo>[^\s<>:]+\.\w{2,5})\s+\((?:arquivo anexado|file attached|archivo adjunto)\)",
     re.IGNORECASE,
 )
 RE_ANEXO_IOS = re.compile(r"<(?:anexado|attached|adjunto):\s*(?P<arquivo>[^>]+)>", re.IGNORECASE)
+# Nome do grupo no nome do arquivo exportado
+RE_NOME_GRUPO = re.compile(
+    r"^(?:Conversa do WhatsApp com|WhatsApp Chat with|WhatsApp Chat -|Chat de WhatsApp con)\s*(?P<nome>.+?)"
+    r"(?:\s*\(\d+\))?(?:\.zip|\.txt)?$",
+    re.IGNORECASE,
+)
 
-COLUNAS = [
-    ("Data", 12),
-    ("Hora", 9),
-    ("Remetente", 24),
-    ("Arquivo", 34),
-    ("Legenda", 40),
-    ("Largura", 9),
-    ("Altura", 9),
-    ("Tamanho (KB)", 12),
-    ("Hash (SHA-256)", 20),
-    ("Texto da imagem (OCR)", 45),
-    ("Link", 14),
-    ("Miniatura", 18),
+# --------------------------------------------------------------------------- planilha: colunas
+
+ABA_RESUMO = "Resumo"
+ABA_DETALHE = "Detalhe"
+ABA_IGNORADAS = "Ignoradas"
+COLUNAS_RESUMO = [
+    ("Data do informe", 13), ("Unidade", 22),
+    ("Tamborado/Grelhado (total)", 15), ("A tamborar (total)", 13),
+    ("Aguardando reanálise/fora de faixa", 15), ("Estoque total visual", 13),
+    ("Carregamento D-1", 13), ("Produção D-1", 12), ("Expedição volume (t)", 13),
+    ("TT veículos", 10), ("Veículos em fila", 10), ("Gusa irregular", 11), ("Cargas de lingoteira", 12),
+    ("Conferência", 30), ("Grupo", 20), ("Enviado em", 12), ("Hora", 9), ("Remetente", 20),
+    ("Arquivo", 30), ("Legenda", 25), ("Link", 13), ("Hash (SHA-256)", 18),
 ]
-COL = {nome: i + 1 for i, (nome, _) in enumerate(COLUNAS)}
+COLUNAS_DETALHE = [
+    ("Data do informe", 13), ("Unidade", 22), ("Seção", 20), ("Item", 32), ("Quantidade", 12),
+    ("Arquivo", 30), ("Hash (SHA-256)", 18),
+]
+COLUNAS_IGNORADAS = [("Enviado em", 12), ("Remetente", 20), ("Arquivo", 30), ("Hash (SHA-256)", 18)]
+CAMPOS_NUMERICOS = {
+    "Tamborado/Grelhado (total)": "tamborado_grelhado_total",
+    "A tamborar (total)": "a_tamborar_total",
+    "Aguardando reanálise/fora de faixa": "aguardando_reanalise_fora_de_faixa",
+    "Estoque total visual": "estoque_total_visual",
+    "Carregamento D-1": "carregamento_d1",
+    "Produção D-1": "producao_d1",
+    "Expedição volume (t)": "expedicao_volume_t",
+    "TT veículos": "tt_veiculos",
+    "Veículos em fila": "veiculos_em_fila",
+    "Gusa irregular": "gusa_irregular",
+    "Cargas de lingoteira": "cargas_de_lingoteira",
+}
+
+# --------------------------------------------------------------------------- leitura com o Claude
+
+_NUM = {"anyOf": [{"type": "number"}, {"type": "null"}]}
+_ITENS = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {"item": {"type": "string"}, "quantidade": _NUM},
+        "required": ["item", "quantidade"],
+        "additionalProperties": False,
+    },
+}
+ESQUEMA_INFORME = {
+    "type": "object",
+    "properties": {
+        "eh_informe_estoque": {"type": "boolean"},
+        "unidade": {"type": "string"},
+        "data_informe": {"type": "string"},
+        "tamborado_grelhado": _ITENS,
+        "tamborado_grelhado_total": _NUM,
+        "a_tamborar": _ITENS,
+        "a_tamborar_total": _NUM,
+        **{campo: _NUM for campo in CAMPOS_NUMERICOS.values()
+           if campo not in ("tamborado_grelhado_total", "a_tamborar_total")},
+        "observacoes": {"type": "string"},
+    },
+    "additionalProperties": False,
+}
+ESQUEMA_INFORME["required"] = list(ESQUEMA_INFORME["properties"])
+
+INSTRUCOES = """Você recebe uma imagem enviada num grupo de WhatsApp. O padrão esperado é um \
+"INFORME ESTOQUE VISUAL" (logo Vetorial) de uma unidade (ex.: "VS RIBAS DO RIO PARDO", "VS CORUMBÁ"), \
+com as seções Gestão de Gusa (tabelas "Tamborado/Grelhado" e "A Tamborar", "Aguardando Reanálise/Fora \
+de Faixa", "Estoque Total Visual", "Carregamento D-1", "Produção D-1", "Expedição Atualizada" com \
+Volume (t), "Expedição Atualizada em Veículos" com TT Veículos e Veículos em Fila) e Gestão de Sucatas \
+("Gusa Irregular", "Cargas de Lingoteira").
+
+Extraia os dados exatamente como aparecem na imagem:
+- eh_informe_estoque: false se a imagem não for esse informe (nesse caso deixe os demais campos vazios/null).
+- unidade: nome da unidade sem o prefixo "VS" (ex.: "Ribas do Rio Pardo", "Corumbá").
+- data_informe: no formato DD/MM/AAAA.
+- tamborado_grelhado e a_tamborar: todas as linhas da tabela, na ordem, com o texto do item como está \
+(sem o número da linha) e a quantidade.
+- Números no padrão brasileiro: vírgula é decimal ("71,66" -> 71.66; "300,00" -> 300). Campo vazio ou \
+ilegível -> null. Não calcule nem corrija valores: copie o que está escrito, inclusive os totais.
+- observacoes: anote apenas algo fora do padrão ou difícil de ler; senão, string vazia."""
+
+
+class ErroLeitura(Exception):
+    pass
+
+
+def preparar_imagem_para_api(caminho: Path) -> tuple[str, str]:
+    dados = caminho.read_bytes()
+    tipo = TIPOS_ACEITOS_API.get(caminho.suffix.lower())
+    if tipo and len(dados) <= LIMITE_BYTES_API:
+        return tipo, base64.standard_b64encode(dados).decode()
+    if PILImage is None:
+        raise ErroLeitura("formato não suportado pela API; instale o Pillow para converter")
+    with PILImage.open(caminho) as img:
+        img = img.convert("RGB")
+        img.thumbnail((2400, 2400))
+        buf = io.BytesIO()
+        img.save(buf, "JPEG", quality=90)
+    return "image/jpeg", base64.standard_b64encode(buf.getvalue()).decode()
+
+
+def ler_informe(cliente, modelo: str, caminho: Path) -> dict:
+    import anthropic
+
+    tipo, dados = preparar_imagem_para_api(caminho)
+    try:
+        resposta = cliente.beta.messages.create(
+            model=modelo,
+            max_tokens=8000,
+            betas=["server-side-fallback-2026-07-01"],
+            fallbacks="default",  # se o modelo recusar por engano, a API tenta outro modelo
+            output_config={
+                "effort": "medium",
+                "format": {"type": "json_schema", "schema": ESQUEMA_INFORME},
+            },
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": tipo, "data": dados}},
+                    {"type": "text", "text": INSTRUCOES},
+                ],
+            }],
+        )
+    except anthropic.AuthenticationError:
+        sys.exit("Chave da API inválida. Confira a variável ANTHROPIC_API_KEY.")
+    except anthropic.RateLimitError:
+        raise ErroLeitura("limite de uso da API atingido; rode de novo mais tarde")
+    except anthropic.APIConnectionError:
+        raise ErroLeitura("sem conexão com a API")
+    except anthropic.APIStatusError as erro:
+        raise ErroLeitura(f"erro da API ({erro.status_code}): {erro.message}")
+
+    if resposta.stop_reason == "refusal":
+        raise ErroLeitura("a API recusou ler esta imagem")
+    if resposta.stop_reason == "max_tokens":
+        raise ErroLeitura("resposta cortada (max_tokens)")
+    texto = next((b.text for b in resposta.content if b.type == "text"), "")
+    try:
+        return json.loads(texto)
+    except json.JSONDecodeError:
+        raise ErroLeitura("resposta da API não veio em JSON")
+
+
+def conferir(informe: dict) -> str:
+    """Confere as somas do próprio informe; divergência costuma indicar erro de leitura."""
+    problemas = []
+
+    def soma(itens):
+        valores = [i["quantidade"] for i in itens if i["quantidade"] is not None]
+        return round(sum(valores), 2) if valores else None
+
+    for secao, chave in (("Tamborado", "tamborado_grelhado"), ("A tamborar", "a_tamborar")):
+        s, total = soma(informe[chave]), informe[f"{chave}_total"]
+        if s is not None and total is not None and abs(s - total) > 0.01:
+            problemas.append(f"{secao}: itens somam {s:g}, total {total:g}")
+    t1, t2, est = informe["tamborado_grelhado_total"], informe["a_tamborar_total"], informe["estoque_total_visual"]
+    if None not in (t1, t2, est) and abs(t1 + t2 - est) > 0.01:
+        problemas.append(f"Estoque total {est:g} ≠ {t1:g} + {t2:g}")
+    vazios = [nome for nome, campo in CAMPOS_NUMERICOS.items() if informe[campo] is None]
+    if vazios:
+        problemas.append("sem valor: " + ", ".join(vazios))
+    return "; ".join(problemas) or "OK"
+
+
+def data_do_informe(texto: str):
+    try:
+        return datetime.strptime(texto.strip(), "%d/%m/%Y").date()
+    except ValueError:
+        return texto or None
+
+
+# --------------------------------------------------------------------------- conversa exportada
 
 
 @dataclass
@@ -103,9 +275,6 @@ class RegistroImagem:
     arquivo: str
     legenda: str
     caminho: Path
-
-
-# --------------------------------------------------------------------------- leitura
 
 
 def interpretar_data_hora(data: str, hora: str, mes_primeiro: bool) -> datetime | None:
@@ -131,12 +300,9 @@ def ler_mensagens(arquivo_txt: Path, mes_primeiro: bool) -> list[Mensagem]:
         quando = interpretar_data_hora(m["data"], m["hora"], mes_primeiro) if m else None
         if m and quando:
             resto = m["resto"]
-            if ": " in resto:
-                remetente, conteudo = resto.split(": ", 1)
-            else:  # mensagem de sistema ("Fulano entrou usando o link...")
-                remetente, conteudo = "", resto
+            remetente, conteudo = resto.split(": ", 1) if ": " in resto else ("", resto)
             mensagens.append(Mensagem(quando, remetente.strip(), [conteudo]))
-        elif mensagens:  # continuação da mensagem anterior (quebra de linha / legenda)
+        elif mensagens:
             mensagens[-1].linhas.append(linha)
     return mensagens
 
@@ -169,119 +335,58 @@ def encontrar_txt(pasta: Path) -> Path:
     return (preferidos or candidatos)[0]
 
 
-# --------------------------------------------------------------------------- imagens
+# --------------------------------------------------------------------------- escolha do grupo
 
 
-def sha256(caminho: Path) -> str:
-    h = hashlib.sha256()
-    with caminho.open("rb") as f:
-        for bloco in iter(lambda: f.read(1 << 16), b""):
-            h.update(bloco)
-    return h.hexdigest()
+def normalizar(texto: str) -> str:
+    sem_acento = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode()
+    return re.sub(r"\s+", " ", sem_acento).strip().casefold()
 
 
-def dimensoes(caminho: Path) -> tuple[int | None, int | None]:
-    if PILImage is None:
-        return None, None
-    try:
-        with PILImage.open(caminho) as img:
-            return img.size
-    except Exception:
-        return None, None
+def nome_do_grupo(caminho: Path) -> str | None:
+    """Nome do grupo a partir do nome da exportação (.zip, pasta ou .txt)."""
+    for candidato in [caminho, *(caminho.glob("*.txt") if caminho.is_dir() else [])]:
+        m = RE_NOME_GRUPO.match(candidato.name)
+        if m:
+            return m["nome"].strip()
+    return None
 
 
-def ler_texto_ocr(caminho: Path, idioma: str) -> str:
-    try:
-        import pytesseract
-    except ImportError:
-        sys.exit("Para usar --ocr instale:  pip install pytesseract  (e o programa Tesseract-OCR)")
-    try:
-        with PILImage.open(caminho) as img:
-            return pytesseract.image_to_string(img, lang=idioma).strip()
-    except Exception as erro:
-        return f"(erro no OCR: {erro})"
+def listar_exportacoes(pasta: Path) -> list[Path]:
+    """Numa pasta com várias exportações, cada .zip ou subpasta com .txt é uma exportação."""
+    achadas = [p for p in sorted(pasta.iterdir()) if p.suffix.lower() == ".zip" and zipfile.is_zipfile(p)]
+    achadas += [p for p in sorted(pasta.iterdir()) if p.is_dir() and any(p.glob("*.txt"))]
+    return achadas
 
 
-def criar_miniatura(origem: Path, destino: Path, lado: int = 120) -> Path | None:
-    if PILImage is None:
-        return None
-    try:
-        with PILImage.open(origem) as img:
-            img = img.convert("RGB")
-            img.thumbnail((lado, lado))
-            destino.parent.mkdir(parents=True, exist_ok=True)
-            img.save(destino, "JPEG", quality=80)
-        return destino
-    except Exception:
-        return None
+def escolher_exportacao(origem: Path, grupo: str | None) -> tuple[Path, str]:
+    eh_uma_exportacao = origem.is_file() or any(origem.glob("*.txt"))
+    if eh_uma_exportacao:
+        nome = nome_do_grupo(origem) or ""
+        if grupo and nome and normalizar(grupo) not in normalizar(nome):
+            sys.exit(f'Esta exportação é do grupo "{nome}", não de "{grupo}".')
+        return origem, nome or (grupo or "")
 
+    exportacoes = [(p, nome_do_grupo(p) or p.stem) for p in listar_exportacoes(origem)]
+    if not exportacoes:
+        sys.exit(f"Nenhuma exportação do WhatsApp (.zip ou pasta com .txt) em {origem}")
+    if not grupo:
+        if len(exportacoes) == 1:
+            return exportacoes[0]
+        nomes = "\n  ".join(n for _, n in exportacoes)
+        sys.exit(f"Há exportações de vários grupos nesta pasta. Escolha um com --grupo:\n  {nomes}")
 
-# --------------------------------------------------------------------------- planilha
-
-
-def abrir_planilha(caminho: Path):
-    if caminho.exists():
-        wb = load_workbook(caminho)
-        ws = wb["Imagens"] if "Imagens" in wb.sheetnames else wb.active
-        return wb, ws
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Imagens"
-    cabecalho = Font(bold=True, color="FFFFFF")
-    fundo = PatternFill("solid", fgColor="128C7E")
-    for i, (nome, largura) in enumerate(COLUNAS, start=1):
-        c = ws.cell(row=1, column=i, value=nome)
-        c.font, c.fill = cabecalho, fundo
-        c.alignment = Alignment(horizontal="center", vertical="center")
-        ws.column_dimensions[get_column_letter(i)].width = largura
-    ws.freeze_panes = "A2"
-    return wb, ws
-
-
-def hashes_existentes(ws) -> set[str]:
-    return {
-        str(v) for (v,) in ws.iter_rows(min_row=2, min_col=COL["Hash (SHA-256)"],
-                                         max_col=COL["Hash (SHA-256)"], values_only=True) if v
-    }
-
-
-def adicionar_linha(ws, reg: RegistroImagem, arquivo_final: Path, planilha: Path,
-                    hash_: str, ocr: str, miniatura: Path | None) -> None:
-    largura, altura = dimensoes(arquivo_final)
-    linha = ws.max_row + 1
-    valores = {
-        "Data": reg.quando.date(),
-        "Hora": reg.quando.time(),
-        "Remetente": reg.remetente,
-        "Arquivo": reg.arquivo,
-        "Legenda": reg.legenda,
-        "Largura": largura,
-        "Altura": altura,
-        "Tamanho (KB)": round(arquivo_final.stat().st_size / 1024, 1),
-        "Hash (SHA-256)": hash_,
-        "Texto da imagem (OCR)": ocr,
-    }
-    for nome, valor in valores.items():
-        c = ws.cell(row=linha, column=COL[nome], value=valor)
-        c.alignment = Alignment(vertical="top", wrap_text=nome in ("Legenda", "Texto da imagem (OCR)"))
-    ws.cell(row=linha, column=COL["Data"]).number_format = "DD/MM/YYYY"
-    ws.cell(row=linha, column=COL["Hora"]).number_format = "HH:MM:SS"
-
-    link = ws.cell(row=linha, column=COL["Link"], value="Abrir imagem")
-    try:
-        link.hyperlink = str(arquivo_final.resolve().relative_to(planilha.resolve().parent))
-    except ValueError:
-        link.hyperlink = arquivo_final.resolve().as_uri()
-    link.font = Font(color="0563C1", underline="single")
-
-    if miniatura is not None:
-        from openpyxl.drawing.image import Image as XLImage
-        img = XLImage(str(miniatura))
-        ws.add_image(img, f"{get_column_letter(COL['Miniatura'])}{linha}")
-        ws.row_dimensions[linha].height = max(img.height * 0.75 + 4, 15)
-
-
-# --------------------------------------------------------------------------- principal
+    alvo = normalizar(grupo)
+    exatos = [e for e in exportacoes if normalizar(e[1]) == alvo]
+    parecidos = exatos or [e for e in exportacoes if alvo in normalizar(e[1])]
+    if not parecidos:
+        nomes = "\n  ".join(n for _, n in exportacoes)
+        sys.exit(f'Nenhuma exportação do grupo "{grupo}". Grupos encontrados:\n  {nomes}')
+    if len({normalizar(n) for _, n in parecidos}) > 1:
+        nomes = "\n  ".join(n for _, n in parecidos)
+        sys.exit(f'"{grupo}" combina com mais de um grupo; seja mais específico:\n  {nomes}')
+    # Mesmo grupo exportado mais de uma vez: usa a exportação mais recente
+    return max(parecidos, key=lambda e: e[0].stat().st_mtime)
 
 
 def preparar_origem(origem: Path, temp: Path) -> Path:
@@ -290,7 +395,7 @@ def preparar_origem(origem: Path, temp: Path) -> Path:
     if zipfile.is_zipfile(origem):
         with zipfile.ZipFile(origem) as z:
             raiz = temp.resolve()
-            for membro in z.infolist():  # evita caminhos maliciosos ("../")
+            for membro in z.infolist():
                 destino = (raiz / membro.filename).resolve()
                 if raiz not in destino.parents and destino != raiz:
                     sys.exit(f"Arquivo suspeito dentro do zip: {membro.filename}")
@@ -301,6 +406,106 @@ def preparar_origem(origem: Path, temp: Path) -> Path:
     sys.exit(f"Origem inválida: {origem} (use o .zip exportado, a pasta extraída ou o .txt)")
 
 
+# --------------------------------------------------------------------------- planilha
+
+
+def sha256(caminho: Path) -> str:
+    h = hashlib.sha256()
+    with caminho.open("rb") as f:
+        for bloco in iter(lambda: f.read(1 << 16), b""):
+            h.update(bloco)
+    return h.hexdigest()
+
+
+def preparar_aba(wb, nome: str, colunas: list[tuple[str, int]]):
+    if nome in wb.sheetnames:
+        return wb[nome]
+    ws = wb.create_sheet(nome)
+    for i, (titulo, largura) in enumerate(colunas, start=1):
+        c = ws.cell(row=1, column=i, value=titulo)
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = PatternFill("solid", fgColor="2F5D3A")
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws.column_dimensions[get_column_letter(i)].width = largura
+    ws.row_dimensions[1].height = 45
+    ws.freeze_panes = "A2"
+    return ws
+
+
+def abrir_planilha(caminho: Path):
+    if caminho.exists():
+        wb = load_workbook(caminho)
+    else:
+        wb = Workbook()
+        wb.remove(wb.active)
+    return (wb, preparar_aba(wb, ABA_RESUMO, COLUNAS_RESUMO), preparar_aba(wb, ABA_DETALHE, COLUNAS_DETALHE),
+            preparar_aba(wb, ABA_IGNORADAS, COLUNAS_IGNORADAS))
+
+
+def indice_colunas(ws) -> dict[str, int]:
+    return {c.value: c.column for c in ws[1] if c.value}
+
+
+def hashes_existentes(ws) -> set[str]:
+    col = indice_colunas(ws)["Hash (SHA-256)"]
+    return {str(v) for (v,) in ws.iter_rows(min_row=2, min_col=col, max_col=col, values_only=True) if v}
+
+
+def escrever(ws, valores: dict) -> int:
+    col = indice_colunas(ws)
+    linha = ws.max_row + 1
+    for nome, valor in valores.items():
+        c = ws.cell(row=linha, column=col[nome], value=valor)
+        if isinstance(valor, date):
+            c.number_format = "DD/MM/YYYY"
+        elif isinstance(valor, (int, float)) and not isinstance(valor, bool):
+            c.number_format = "#,##0.##"
+    return linha
+
+
+def lancar(ws_resumo, ws_detalhe, reg: RegistroImagem, informe: dict, grupo: str,
+           arquivo_final: Path, planilha: Path, hash_: str) -> None:
+    data_inf = data_do_informe(informe["data_informe"])
+    unidade = informe["unidade"]
+    conferencia = conferir(informe)
+    valores = {
+        "Data do informe": data_inf, "Unidade": unidade,
+        **{nome: informe[campo] for nome, campo in CAMPOS_NUMERICOS.items()},
+        "Conferência": conferencia, "Grupo": grupo,
+        "Enviado em": reg.quando.date(), "Hora": reg.quando.time(), "Remetente": reg.remetente,
+        "Arquivo": reg.arquivo, "Legenda": reg.legenda or None, "Link": "Abrir imagem",
+        "Hash (SHA-256)": hash_,
+    }
+    linha = escrever(ws_resumo, valores)
+    col = indice_colunas(ws_resumo)
+    ws_resumo.cell(row=linha, column=col["Hora"]).number_format = "HH:MM"
+    link = ws_resumo.cell(row=linha, column=col["Link"])
+    try:
+        link.hyperlink = str(arquivo_final.resolve().relative_to(planilha.resolve().parent))
+    except ValueError:
+        link.hyperlink = arquivo_final.resolve().as_uri()
+    link.font = Font(color="0563C1", underline="single")
+    if conferencia != "OK":
+        ws_resumo.cell(row=linha, column=col["Conferência"]).fill = PatternFill("solid", fgColor="FFE699")
+
+    for secao, chave in (("Tamborado/Grelhado", "tamborado_grelhado"), ("A tamborar", "a_tamborar")):
+        for item in informe[chave]:
+            escrever(ws_detalhe, {
+                "Data do informe": data_inf, "Unidade": unidade, "Seção": secao,
+                "Item": item["item"], "Quantidade": item["quantidade"],
+                "Arquivo": reg.arquivo, "Hash (SHA-256)": hash_,
+            })
+
+
+def finalizar_abas(*abas) -> None:
+    for ws in abas:
+        if ws.max_row > 1:
+            ws.auto_filter.ref = f"A1:{get_column_letter(ws.max_column)}{ws.max_row}"
+
+
+# --------------------------------------------------------------------------- principal
+
+
 def data_br(texto: str) -> date:
     try:
         return datetime.strptime(texto, "%d/%m/%Y").date()
@@ -309,38 +514,43 @@ def data_br(texto: str) -> date:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Coleta imagens de um grupo do WhatsApp para uma planilha.")
-    p.add_argument("origem", type=Path, help="o .zip exportado do WhatsApp, a pasta extraída ou o .txt")
-    p.add_argument("--planilha", type=Path, default=Path("imagens_whatsapp.xlsx"),
+    p = argparse.ArgumentParser(description="Lê os informes de estoque enviados num grupo do WhatsApp para uma planilha.")
+    p.add_argument("origem", type=Path,
+                   help="o .zip exportado, a pasta extraída, ou uma pasta com exportações de vários grupos")
+    p.add_argument("--grupo", help="nome (ou parte do nome) do grupo a processar")
+    p.add_argument("--planilha", type=Path, default=Path("estoque_visual.xlsx"),
                    help="planilha de saída (é criada, ou atualizada se já existir)")
     p.add_argument("--pasta-imagens", type=Path, default=None,
                    help="para onde copiar as imagens (padrão: pasta 'imagens' ao lado da planilha)")
-    p.add_argument("--desde", type=data_br, help="só imagens a partir desta data (DD/MM/AAAA)")
-    p.add_argument("--ate", type=data_br, help="só imagens até esta data (DD/MM/AAAA)")
+    p.add_argument("--desde", type=data_br, help="só imagens enviadas a partir desta data (DD/MM/AAAA)")
+    p.add_argument("--ate", type=data_br, help="só imagens enviadas até esta data (DD/MM/AAAA)")
     p.add_argument("--remetente", help="só imagens de quem tem este texto no nome")
-    p.add_argument("--miniaturas", action="store_true", help="insere uma miniatura de cada imagem na planilha")
-    p.add_argument("--ocr", action="store_true", help="lê o texto das imagens (pytesseract + Tesseract)")
-    p.add_argument("--idioma-ocr", default="por", help="idioma do Tesseract (padrão: por)")
+    p.add_argument("--modelo", default=MODELO_PADRAO, help=f"modelo do Claude (padrão: {MODELO_PADRAO})")
     p.add_argument("--mes-primeiro", action="store_true",
                    help="datas da exportação no formato americano MM/DD/AAAA")
     args = p.parse_args()
 
     if not args.origem.exists():
         sys.exit(f"Não encontrei {args.origem}")
-    if args.ocr and PILImage is None:
-        sys.exit("Para usar --ocr instale também o Pillow:  pip install pillow")
+    try:
+        import anthropic
+    except ImportError:
+        sys.exit("Falta a biblioteca anthropic. Instale com:  pip install -r requirements.txt")
+    cliente = anthropic.Anthropic()
+
+    exportacao, grupo = escolher_exportacao(args.origem, args.grupo)
+    print(f"Grupo: {grupo or '(nome não identificado)'}  ←  {exportacao.name}")
 
     planilha: Path = args.planilha
     pasta_imagens: Path = args.pasta_imagens or planilha.resolve().parent / "imagens"
     pasta_imagens.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory() as tmp:
-        pasta = preparar_origem(args.origem, Path(tmp))
-        txt = encontrar_txt(pasta) if args.origem.suffix.lower() != ".txt" else args.origem
-        print(f"Lendo conversa: {txt.name}")
+        pasta = preparar_origem(exportacao, Path(tmp))
+        txt = exportacao if exportacao.suffix.lower() == ".txt" else encontrar_txt(pasta)
         mensagens = ler_mensagens(txt, args.mes_primeiro)
         registros = extrair_imagens(mensagens, pasta)
-        print(f"{len(mensagens)} mensagens, {len(registros)} imagens na exportação")
+        print(f"{len(mensagens)} mensagens, {len(registros)} imagens na conversa")
 
         if args.desde:
             registros = [r for r in registros if r.quando.date() >= args.desde]
@@ -350,36 +560,49 @@ def main() -> None:
             filtro = args.remetente.casefold()
             registros = [r for r in registros if filtro in r.remetente.casefold()]
 
-        wb, ws = abrir_planilha(planilha)
-        ja_lancadas = hashes_existentes(ws)
-        novas = 0
-        for reg in sorted(registros, key=lambda r: r.quando):
-            hash_ = sha256(reg.caminho)
-            if hash_ in ja_lancadas:
-                continue
-            destino = pasta_imagens / reg.arquivo
-            if destino.exists() and sha256(destino) != hash_:
-                destino = pasta_imagens / f"{destino.stem}_{hash_[:8]}{destino.suffix}"
-            shutil.copy2(reg.caminho, destino)
-
-            ocr = ler_texto_ocr(destino, args.idioma_ocr) if args.ocr else ""
-            mini = None
-            if args.miniaturas:
-                mini = criar_miniatura(destino, pasta_imagens / ".miniaturas" / f"{hash_[:16]}.jpg")
-            adicionar_linha(ws, reg, destino, planilha, hash_, ocr, mini)
-            ja_lancadas.add(hash_)
-            novas += 1
-            print(f"  + {reg.quando:%d/%m/%Y %H:%M}  {reg.remetente or '-':<20}  {reg.arquivo}")
-
-        if ws.max_row > 1:
-            ws.auto_filter.ref = f"A1:{get_column_letter(len(COLUNAS))}{ws.max_row}"
-        planilha.parent.mkdir(parents=True, exist_ok=True)
+        wb, ws_resumo, ws_detalhe, ws_ignoradas = abrir_planilha(planilha)
+        ja_lancadas = hashes_existentes(ws_resumo) | hashes_existentes(ws_ignoradas)
+        novas = ignoradas = falhas = 0
         try:
-            wb.save(planilha)
-        except PermissionError:
-            sys.exit(f"Não consegui salvar {planilha}. Ela está aberta no Excel? Feche e rode de novo.")
+            for reg in sorted(registros, key=lambda r: r.quando):
+                hash_ = sha256(reg.caminho)
+                if hash_ in ja_lancadas:
+                    continue
+                print(f"  {reg.quando:%d/%m/%Y %H:%M}  {reg.arquivo} ... ", end="", flush=True)
+                try:
+                    informe = ler_informe(cliente, args.modelo, reg.caminho)
+                except ErroLeitura as erro:
+                    print(f"FALHOU ({erro})")
+                    falhas += 1
+                    continue
+                if not informe["eh_informe_estoque"]:
+                    print("não é informe de estoque, ignorada")
+                    ignoradas += 1
+                    ja_lancadas.add(hash_)
+                    escrever(ws_ignoradas, {"Enviado em": reg.quando.date(), "Remetente": reg.remetente,
+                                            "Arquivo": reg.arquivo, "Hash (SHA-256)": hash_})
+                    continue
 
-    print(f"\n{novas} imagens novas lançadas em {planilha} (imagens copiadas para {pasta_imagens})")
+                destino = pasta_imagens / reg.arquivo
+                if destino.exists() and sha256(destino) != hash_:
+                    destino = pasta_imagens / f"{destino.stem}_{hash_[:8]}{destino.suffix}"
+                shutil.copy2(reg.caminho, destino)
+                lancar(ws_resumo, ws_detalhe, reg, informe, grupo, destino, planilha, hash_)
+                ja_lancadas.add(hash_)
+                novas += 1
+                print(f"{informe['unidade']} {informe['data_informe']} "
+                      f"estoque {informe['estoque_total_visual']}  [{conferir(informe)}]")
+        finally:  # salva o que já foi lido mesmo se algo der errado no meio
+            finalizar_abas(ws_resumo, ws_detalhe, ws_ignoradas)
+            planilha.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                wb.save(planilha)
+            except PermissionError:
+                sys.exit(f"Não consegui salvar {planilha}. Ela está aberta no Excel? Feche e rode de novo.")
+
+    print(f"\n{novas} informes lançados em {planilha}; {ignoradas} imagens não eram informe; {falhas} falharam.")
+    if falhas:
+        print("Rode de novo para tentar as que falharam (as já lançadas não são repetidas).")
 
 
 if __name__ == "__main__":
