@@ -46,9 +46,19 @@ O monitor fica conectado ao WhatsApp e lança cada informe na planilha **assim q
    número que está no grupo: **WhatsApp → Configurações → Aparelhos conectados → Conectar um aparelho**
    e leia o QR code.
 3. O monitor lista os grupos do número: digite o número do grupo dos informes.
-4. Pronto. Deixe a janela aberta. A sessão e o grupo ficam salvos; das próximas vezes ele já conecta sozinho.
-5. Para abrir sozinho junto com o Windows: dê dois cliques em `ativar_inicio_automatico.bat`
-   (rodar de novo desativa).
+4. Pronto. A sessão e o grupo ficam salvos; das próximas vezes ele já conecta sozinho.
+
+Depois dessa primeira vez, dá para rodar **sem janela nenhuma**:
+
+| Arquivo | O que faz |
+|---|---|
+| `iniciar_oculto.vbs` | inicia o monitor escondido, em segundo plano |
+| `parar_monitor.bat` | para o monitor (escondido ou com janela) |
+| `ativar_inicio_automatico.bat` | inicia escondido sempre que você entra no Windows (rodar de novo desativa) |
+| `monitor.log` | tudo o que o monitor fez: conexões, imagens recebidas, informes lançados, erros |
+
+Só roda um monitor por vez: se tentar abrir outro, ele avisa e não abre. Se o WhatsApp pedir um
+QR code novo com o monitor escondido, a imagem do QR code abre sozinha na tela.
 
 O que é bom saber:
 - **O PC precisa estar ligado** (e sem entrar em suspensão: Configurações → Sistema → Energia).

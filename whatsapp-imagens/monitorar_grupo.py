@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import queue
+import socket
 import sys
 import threading
 from datetime import datetime
@@ -49,6 +50,10 @@ ARQUIVO_CONFIG = PASTA / "config.json"
 ARQUIVO_SESSAO = "sessao_whatsapp.sqlite3"  # criado na pasta do script
 ARQUIVO_QR = PASTA / "qrcode_whatsapp.png"
 EXTENSOES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif"}
+ARQUIVO_PARAR = PASTA / "parar.flag"  # criado pelo parar_monitor.bat
+ARQUIVO_PID = PASTA / "monitor.pid"
+PORTA_TRAVA = 48731  # só uma cópia do monitor por vez (porta local, não abre nada para a rede)
+SAIDA_JA_RODANDO = 3
 ESPERA_PLANILHA_ABERTA = 60  # segundos entre tentativas quando a planilha está aberta no Excel
 
 log = logging.getLogger("monitor")
@@ -193,7 +198,7 @@ class Monitor:
             self.config.update(grupo_jid=self.alvo, grupo_nome=self.nome_alvo)
             salvar_config(self.config)
             pendentes, self.antes_da_escolha = self.antes_da_escolha, []
-        log.info(f'Monitorando o grupo "{self.nome_alvo}". As configurações ficaram em {ARQUIVO_CONFIG.name}.')
+        log.info(f"Grupo escolhido; a escolha ficou salva em {ARQUIVO_CONFIG.name}.")
         for cliente_, evento in pendentes:
             if chave_jid(evento.Info.MessageSource.Chat) == self.alvo:
                 self.fila.put(("baixar", cliente_, evento))
@@ -300,6 +305,17 @@ def main() -> None:
     args = p.parse_args()
 
     configurar_log()
+
+    # Duas cópias ao mesmo tempo brigariam pela mesma sessão do WhatsApp
+    trava = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        trava.bind(("127.0.0.1", PORTA_TRAVA))
+    except OSError:
+        log.info("O monitor já está rodando (talvez escondido). Para parar: parar_monitor.bat")
+        sys.exit(SAIDA_JA_RODANDO)
+    ARQUIVO_PARAR.unlink(missing_ok=True)
+    ARQUIVO_PID.write_text(str(os.getpid()))
+
     try:
         from neonize.client import NewClient
         from neonize.events import ConnectedEv, LoggedOutEv, MessageEv
@@ -340,16 +356,23 @@ def main() -> None:
     threading.Thread(target=monitor.trabalhar, daemon=True).start()
     monitor.pendentes_no_disco()
 
+    def pediram_para_parar() -> bool:
+        if ARQUIVO_PARAR.exists():
+            log.info("Parando o monitor (pedido pelo parar_monitor.bat).")
+            monitor.encerrar.set()
+        return monitor.encerrar.is_set()
+
     try:
         while not monitor.conectado.wait(1):
-            if monitor.encerrar.is_set():
+            if pediram_para_parar():
                 break
-        if monitor.conectado.is_set() and monitor.alvo is None:
+        if monitor.conectado.is_set() and monitor.alvo is None and not monitor.encerrar.is_set():
             monitor.escolher_grupo(cliente, args.grupo)
-        if monitor.alvo:
-            log.info(f'Monitorando o grupo "{monitor.nome_alvo}". Deixe esta janela aberta (Ctrl+C para sair).')
+        if monitor.alvo and not monitor.encerrar.is_set():
+            log.info(f'Monitorando o grupo "{monitor.nome_alvo}". Deixe esta janela aberta ou minimizada '
+                     f'(Ctrl+C para sair).')
         while not monitor.encerrar.wait(1):
-            pass
+            pediram_para_parar()
     except KeyboardInterrupt:
         log.info("Encerrando...")
     finally:
@@ -358,6 +381,7 @@ def main() -> None:
             cliente.disconnect()
         except Exception:
             pass
+        ARQUIVO_PID.unlink(missing_ok=True)
     sys.exit(1 if not monitor.alvo else 0)
 
 

@@ -1,5 +1,5 @@
 @echo off
-rem Faz o monitor abrir sozinho (minimizado) toda vez que voce entrar no Windows.
+rem Faz o monitor abrir sozinho, sem janela, toda vez que voce entrar no Windows.
 rem Rodar de novo desativa.
 cd /d "%~dp0"
 set "ATALHO=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Monitor Informe Estoque.bat"
@@ -18,8 +18,9 @@ if not exist config.json (
 )
 
 > "%ATALHO%" echo @echo off
->> "%ATALHO%" echo start "Monitor Informe Estoque" /min "%~dp0iniciar_monitor.bat"
+>> "%ATALHO%" echo start "" wscript.exe "%~dp0iniciar_oculto.vbs"
 echo Inicio automatico ATIVADO.
-echo O monitor vai abrir minimizado sempre que voce entrar no Windows.
+echo O monitor vai abrir escondido (sem janela) sempre que voce entrar no Windows.
+echo Para parar: parar_monitor.bat. Para ver o que ele fez: abra o monitor.log.
 echo Para desativar, rode este arquivo de novo.
 pause

@@ -10,3 +10,5 @@ whatsapp-imagens/qrcode_whatsapp.png
 whatsapp-imagens/imagens/
 whatsapp-imagens/*.xlsx
 __pycache__/
+whatsapp-imagens/parar.flag
+whatsapp-imagens/monitor.pid
