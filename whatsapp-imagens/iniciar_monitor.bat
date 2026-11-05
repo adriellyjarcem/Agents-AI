@@ -15,6 +15,24 @@ if not defined PY (
   exit /b 1
 )
 
+rem Confere as bibliotecas; se faltar alguma, instala antes de comecar
+%PY% -c "import PIL, numpy, openpyxl, rapidocr, onnxruntime, neonize" >nul 2>nul
+if errorlevel 1 (
+  echo Faltam bibliotecas. Instalando agora, so desta vez (pode levar alguns minutos^)...
+  echo.
+  %PY% -m pip install -r requirements.txt
+  %PY% -c "import PIL, numpy, openpyxl, rapidocr, onnxruntime, neonize"
+  if errorlevel 1 (
+    echo.
+    echo A instalacao nao terminou. Copie as mensagens acima e envie para quem esta te ajudando.
+    pause
+    exit /b 1
+  )
+  echo.
+  echo Bibliotecas instaladas.
+  echo.
+)
+
 :inicio
 %PY% monitorar_grupo.py %*
 echo.

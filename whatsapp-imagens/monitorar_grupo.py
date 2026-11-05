@@ -38,8 +38,12 @@ from pathlib import Path
 PASTA = Path(__file__).resolve().parent
 sys.path.insert(0, str(PASTA))
 
-import coletar_imagens as ci  # noqa: E402
-from leitor_informe import ErroLeitura, LeitorInforme  # noqa: E402
+try:
+    import coletar_imagens as ci  # noqa: E402
+    from leitor_informe import ErroLeitura, LeitorInforme  # noqa: E402
+except ModuleNotFoundError as erro:
+    sys.exit(f"Falta a biblioteca '{erro.name}'. Rode o instalar.bat, ou no cmd, nesta pasta:\n"
+             f"  py -m pip install -r requirements.txt")
 
 ARQUIVO_CONFIG = PASTA / "config.json"
 ARQUIVO_SESSAO = "sessao_whatsapp.sqlite3"  # criado na pasta do script
