@@ -2,3 +2,11 @@ node_modules/
 *.log
 config/statusline-anterior.json
 config/conexao.json
+# whatsapp-imagens: dados locais (sessão do WhatsApp, configuração, planilhas e imagens)
+whatsapp-imagens/sessao_whatsapp.sqlite3*
+whatsapp-imagens/config.json
+whatsapp-imagens/monitor.log
+whatsapp-imagens/qrcode_whatsapp.png
+whatsapp-imagens/imagens/
+whatsapp-imagens/*.xlsx
+__pycache__/

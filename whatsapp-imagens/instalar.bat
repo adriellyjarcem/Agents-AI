@@ -48,7 +48,7 @@ if errorlevel 1 (
 
 echo.
 echo Testando o OCR...
-%PY% -c "from leitor_informe import LeitorInforme; LeitorInforme(); print('OCR funcionando.')"
+%PY% -c "import neonize; from leitor_informe import LeitorInforme; LeitorInforme(); print('OCR e WhatsApp prontos.')"
 if errorlevel 1 (
   echo.
   echo As bibliotecas instalaram, mas o OCR nao abriu.
@@ -60,7 +60,8 @@ if errorlevel 1 (
 )
 
 echo.
-echo Tudo pronto. Para usar, abra o cmd nesta pasta e rode:
+echo Tudo pronto. Agora de dois cliques em iniciar_monitor.bat, leia o QR code e escolha o grupo.
+echo Para processar uma exportacao manual, use no cmd:
 echo   %PY% coletar_imagens.py pasta_das_exportacoes --grupo "nome do grupo"
 echo.
 pause
