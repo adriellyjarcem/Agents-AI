@@ -30,18 +30,27 @@ Salve o `.zip` numa pasta no computador (pode juntar exportações de vários gr
 
 ## 2. Instalar (uma vez)
 
-Requer Python 3.10 ou mais novo.
+Requer Python 3.10 ou mais novo ([python.org](https://www.python.org/downloads/); na instalação,
+marque **"Add python.exe to PATH"**).
+
+**No Windows:** dê dois cliques em `instalar.bat`. Ele acha o Python, instala as bibliotecas e
+testa o OCR; se algo der errado, diz o que fazer.
+
+**Pelo terminal:** dentro da pasta `whatsapp-imagens`:
 
 ```bash
-pip install -r requirements.txt
+py -m pip install -r requirements.txt
 ```
+
+(`py -m pip` funciona mesmo quando o comando `pip` sozinho não é reconhecido no cmd; fora do
+Windows use `python3 -m pip`.)
 
 Os modelos de OCR vêm junto com a biblioteca; depois de instalado, funciona sem internet.
 
 ## 3. Rodar
 
 ```bash
-python coletar_imagens.py pasta_das_exportacoes --grupo "Estoque Gusa"
+py coletar_imagens.py pasta_das_exportacoes --grupo "Estoque Gusa"
 ```
 
 `--grupo` aceita parte do nome, sem diferenciar maiúsculas e acentos. Se a pasta tiver vários
