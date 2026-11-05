@@ -7,8 +7,8 @@ Entrada: a exportação oficial do grupo (WhatsApp > grupo > Mais > Exportar con
 "Incluir mídia"). Aceita o .zip, a pasta extraída, ou uma pasta com várias exportações
 (de vários grupos): use --grupo para escolher qual grupo processar.
 
-Cada imagem é lida pelo Claude (API da Anthropic), que devolve os campos do informe em
-JSON. Imagens que não são um informe de estoque (fotos, prints etc.) são ignoradas.
+Cada imagem é lida no próprio computador, com OCR (ver leitor_informe.py): sem API, sem
+internet, sem custo. Imagens que não são um informe de estoque (fotos, prints etc.) são ignoradas.
 
 A planilha recebe as abas:
   Resumo   uma linha por informe: data, unidade, totais, D-1, expedição, sucatas,
@@ -23,17 +23,12 @@ Uso:
     python coletar_imagens.py exportacoes/ --grupo "Estoque Gusa"
     python coletar_imagens.py "WhatsApp Chat - Estoque Gusa.zip" --planilha estoque.xlsx
     python coletar_imagens.py export.zip --desde 01/11/2026
-
-Requer a variável de ambiente ANTHROPIC_API_KEY (ou login com `ant auth login`).
 """
 
 from __future__ import annotations
 
 import argparse
-import base64
 import hashlib
-import io
-import json
 import re
 import shutil
 import sys
@@ -51,16 +46,9 @@ try:
 except ImportError:  # pragma: no cover
     sys.exit("Falta a biblioteca openpyxl. Instale com:  pip install -r requirements.txt")
 
-try:
-    from PIL import Image as PILImage
-except ImportError:
-    PILImage = None
+from leitor_informe import ErroLeitura, LeitorInforme
 
-MODELO_PADRAO = "claude-opus-5-5"
 EXTENSOES_IMAGEM = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".bmp"}
-TIPOS_ACEITOS_API = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
-                     ".webp": "image/webp", ".gif": "image/gif"}
-LIMITE_BYTES_API = 4_500_000
 
 INVISIVEIS = dict.fromkeys(map(ord, "‎‏‪‫‬‭‮﻿"), None)
 
@@ -117,113 +105,7 @@ CAMPOS_NUMERICOS = {
     "Cargas de lingoteira": "cargas_de_lingoteira",
 }
 
-# --------------------------------------------------------------------------- leitura com o Claude
-
-_NUM = {"anyOf": [{"type": "number"}, {"type": "null"}]}
-_ITENS = {
-    "type": "array",
-    "items": {
-        "type": "object",
-        "properties": {"item": {"type": "string"}, "quantidade": _NUM},
-        "required": ["item", "quantidade"],
-        "additionalProperties": False,
-    },
-}
-ESQUEMA_INFORME = {
-    "type": "object",
-    "properties": {
-        "eh_informe_estoque": {"type": "boolean"},
-        "unidade": {"type": "string"},
-        "data_informe": {"type": "string"},
-        "tamborado_grelhado": _ITENS,
-        "tamborado_grelhado_total": _NUM,
-        "a_tamborar": _ITENS,
-        "a_tamborar_total": _NUM,
-        **{campo: _NUM for campo in CAMPOS_NUMERICOS.values()
-           if campo not in ("tamborado_grelhado_total", "a_tamborar_total")},
-        "observacoes": {"type": "string"},
-    },
-    "additionalProperties": False,
-}
-ESQUEMA_INFORME["required"] = list(ESQUEMA_INFORME["properties"])
-
-INSTRUCOES = """Você recebe uma imagem enviada num grupo de WhatsApp. O padrão esperado é um \
-"INFORME ESTOQUE VISUAL" (logo Vetorial) de uma unidade (ex.: "VS RIBAS DO RIO PARDO", "VS CORUMBÁ"), \
-com as seções Gestão de Gusa (tabelas "Tamborado/Grelhado" e "A Tamborar", "Aguardando Reanálise/Fora \
-de Faixa", "Estoque Total Visual", "Carregamento D-1", "Produção D-1", "Expedição Atualizada" com \
-Volume (t), "Expedição Atualizada em Veículos" com TT Veículos e Veículos em Fila) e Gestão de Sucatas \
-("Gusa Irregular", "Cargas de Lingoteira").
-
-Extraia os dados exatamente como aparecem na imagem:
-- eh_informe_estoque: false se a imagem não for esse informe (nesse caso deixe os demais campos vazios/null).
-- unidade: nome da unidade sem o prefixo "VS" (ex.: "Ribas do Rio Pardo", "Corumbá").
-- data_informe: no formato DD/MM/AAAA.
-- tamborado_grelhado e a_tamborar: todas as linhas da tabela, na ordem, com o texto do item como está \
-(sem o número da linha) e a quantidade.
-- Números no padrão brasileiro: vírgula é decimal ("71,66" -> 71.66; "300,00" -> 300). Campo vazio ou \
-ilegível -> null. Não calcule nem corrija valores: copie o que está escrito, inclusive os totais.
-- observacoes: anote apenas algo fora do padrão ou difícil de ler; senão, string vazia."""
-
-
-class ErroLeitura(Exception):
-    pass
-
-
-def preparar_imagem_para_api(caminho: Path) -> tuple[str, str]:
-    dados = caminho.read_bytes()
-    tipo = TIPOS_ACEITOS_API.get(caminho.suffix.lower())
-    if tipo and len(dados) <= LIMITE_BYTES_API:
-        return tipo, base64.standard_b64encode(dados).decode()
-    if PILImage is None:
-        raise ErroLeitura("formato não suportado pela API; instale o Pillow para converter")
-    with PILImage.open(caminho) as img:
-        img = img.convert("RGB")
-        img.thumbnail((2400, 2400))
-        buf = io.BytesIO()
-        img.save(buf, "JPEG", quality=90)
-    return "image/jpeg", base64.standard_b64encode(buf.getvalue()).decode()
-
-
-def ler_informe(cliente, modelo: str, caminho: Path) -> dict:
-    import anthropic
-
-    tipo, dados = preparar_imagem_para_api(caminho)
-    try:
-        resposta = cliente.beta.messages.create(
-            model=modelo,
-            max_tokens=8000,
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",  # se o modelo recusar por engano, a API tenta outro modelo
-            output_config={
-                "effort": "medium",
-                "format": {"type": "json_schema", "schema": ESQUEMA_INFORME},
-            },
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "image", "source": {"type": "base64", "media_type": tipo, "data": dados}},
-                    {"type": "text", "text": INSTRUCOES},
-                ],
-            }],
-        )
-    except anthropic.AuthenticationError:
-        sys.exit("Chave da API inválida. Confira a variável ANTHROPIC_API_KEY.")
-    except anthropic.RateLimitError:
-        raise ErroLeitura("limite de uso da API atingido; rode de novo mais tarde")
-    except anthropic.APIConnectionError:
-        raise ErroLeitura("sem conexão com a API")
-    except anthropic.APIStatusError as erro:
-        raise ErroLeitura(f"erro da API ({erro.status_code}): {erro.message}")
-
-    if resposta.stop_reason == "refusal":
-        raise ErroLeitura("a API recusou ler esta imagem")
-    if resposta.stop_reason == "max_tokens":
-        raise ErroLeitura("resposta cortada (max_tokens)")
-    texto = next((b.text for b in resposta.content if b.type == "text"), "")
-    try:
-        return json.loads(texto)
-    except json.JSONDecodeError:
-        raise ErroLeitura("resposta da API não veio em JSON")
+# --------------------------------------------------------------------------- conferência
 
 
 def conferir(informe: dict) -> str:
@@ -244,6 +126,8 @@ def conferir(informe: dict) -> str:
     vazios = [nome for nome, campo in CAMPOS_NUMERICOS.items() if informe[campo] is None]
     if vazios:
         problemas.append("sem valor: " + ", ".join(vazios))
+    if informe.get("observacoes"):
+        problemas.append(informe["observacoes"])
     return "; ".join(problemas) or "OK"
 
 
@@ -525,18 +409,13 @@ def main() -> None:
     p.add_argument("--desde", type=data_br, help="só imagens enviadas a partir desta data (DD/MM/AAAA)")
     p.add_argument("--ate", type=data_br, help="só imagens enviadas até esta data (DD/MM/AAAA)")
     p.add_argument("--remetente", help="só imagens de quem tem este texto no nome")
-    p.add_argument("--modelo", default=MODELO_PADRAO, help=f"modelo do Claude (padrão: {MODELO_PADRAO})")
     p.add_argument("--mes-primeiro", action="store_true",
                    help="datas da exportação no formato americano MM/DD/AAAA")
     args = p.parse_args()
 
     if not args.origem.exists():
         sys.exit(f"Não encontrei {args.origem}")
-    try:
-        import anthropic
-    except ImportError:
-        sys.exit("Falta a biblioteca anthropic. Instale com:  pip install -r requirements.txt")
-    cliente = anthropic.Anthropic()
+    leitor = LeitorInforme()
 
     exportacao, grupo = escolher_exportacao(args.origem, args.grupo)
     print(f"Grupo: {grupo or '(nome não identificado)'}  ←  {exportacao.name}")
@@ -570,7 +449,7 @@ def main() -> None:
                     continue
                 print(f"  {reg.quando:%d/%m/%Y %H:%M}  {reg.arquivo} ... ", end="", flush=True)
                 try:
-                    informe = ler_informe(cliente, args.modelo, reg.caminho)
+                    informe = leitor.ler(reg.caminho)
                 except ErroLeitura as erro:
                     print(f"FALHOU ({erro})")
                     falhas += 1

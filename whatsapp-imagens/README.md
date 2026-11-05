@@ -3,6 +3,9 @@
 Script em Python que pega as imagens do **Informe Estoque Visual** enviadas num grupo
 do WhatsApp, **lê cada imagem** e lança os números numa planilha Excel.
 
+A leitura é feita **no próprio computador**, com OCR (biblioteca RapidOCR): sem API, sem
+internet e sem custo por imagem. Leva cerca de 1 segundo por imagem.
+
 ## O que vai para a planilha
 
 - **Resumo**: uma linha por informe: data, unidade, total Tamborado/Grelhado, total A Tamborar,
@@ -13,8 +16,10 @@ do WhatsApp, **lê cada imagem** e lança os números numa planilha Excel.
   mudam de unidade para unidade, ex.: "Aciária" em Ribas, "(P) Média de 0,130" em Corumbá).
 - **Ignoradas**: imagens do grupo que não eram informe (fotos, prints), para não serem lidas de novo.
 
-A coluna **Conferência** refaz as contas do próprio informe (itens somam o total? Tamborado + A Tamborar
-= Estoque total?) e fica amarela quando algo não bate, o que geralmente indica erro de leitura.
+A coluna **Conferência** fica amarela quando algo precisa de um olhar humano:
+- as contas do próprio informe não batem (itens não somam o total, ou Tamborado + A Tamborar ≠ Estoque total);
+- algum campo ficou sem valor;
+- o OCR leu um número com baixa confiança ("leitura incerta").
 
 Rodar de novo com uma exportação mais nova **só acrescenta os informes novos**.
 
@@ -23,19 +28,15 @@ Rodar de novo com uma exportação mais nova **só acrescenta os informes novos*
 No celular: abra o grupo → ⋮ → **Mais** → **Exportar conversa** → **Incluir mídia**.
 Salve o `.zip` numa pasta no computador (pode juntar exportações de vários grupos na mesma pasta).
 
-## 2. Instalar
+## 2. Instalar (uma vez)
+
+Requer Python 3.10 ou mais novo.
 
 ```bash
 pip install -r requirements.txt
 ```
 
-A leitura das imagens usa a API do Claude (Anthropic). Crie uma chave em
-https://console.anthropic.com e defina a variável de ambiente:
-
-```bash
-set ANTHROPIC_API_KEY=sua-chave        # Windows (cmd)
-export ANTHROPIC_API_KEY=sua-chave     # Linux / Mac
-```
+Os modelos de OCR vêm junto com a biblioteca; depois de instalado, funciona sem internet.
 
 ## 3. Rodar
 
@@ -53,5 +54,25 @@ direto para um `.zip`.
 | `--pasta-imagens pasta` | onde guardar as cópias das imagens (padrão `imagens/` ao lado da planilha) |
 | `--desde 01/11/2026` / `--ate 30/11/2026` | filtra pela data de envio |
 | `--remetente "Maria"` | só imagens de quem tem esse nome |
-| `--modelo` | modelo do Claude usado na leitura |
 | `--mes-primeiro` | se o celular exporta datas no formato americano (MM/DD) |
+
+## Testar a leitura de uma imagem
+
+```bash
+python leitor_informe.py imagem.jpg
+python leitor_informe.py imagem.jpg --caixas   # mostra tudo o que o OCR enxergou
+```
+
+Útil se um informe novo vier com um layout diferente e algum campo não for lido.
+
+## Como a leitura funciona
+
+1. A imagem é padronizada no tamanho e endireitada se estiver levemente torta (foto da tela).
+2. O OCR acha cada texto da imagem e a sua posição.
+3. Cada campo é localizado pelo **rótulo** ("Carregamento D-1:", "TT Veículos:", "Total:"...) e o
+   valor é o número à direita, alinhado na mesma linha e no mesmo painel. Por isso o script não
+   depende de posições fixas e aceita as diferenças entre as unidades.
+4. Se o número não foi encontrado, a célula é recortada, limpa das linhas da tabela e lida sozinha.
+
+Testado com os informes de Ribas do Rio Pardo e Corumbá, inclusive em versões degradadas
+(JPEG muito comprimido, imagem pequena, grande, desfocada e girada 1,5°): todos os campos corretos.
