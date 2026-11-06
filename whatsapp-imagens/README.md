@@ -57,6 +57,19 @@ Depois dessa primeira vez, dá para rodar **sem janela nenhuma**:
 | `ativar_inicio_automatico.bat` | inicia escondido sempre que você entra no Windows (rodar de novo desativa) |
 | `monitor.log` | tudo o que o monitor fez: conexões, imagens recebidas, informes lançados, erros |
 
+**Salvar a planilha também em outra pasta** (ex.: OneDrive/SharePoint, para o dashboard): rode uma vez
+no cmd, na pasta do monitor, com o caminho entre aspas:
+
+```bash
+py monitorar_grupo.py --copiar-para "C:\caminho\da\pasta"
+```
+
+Depois de cada lançamento, o monitor grava a planilha na pasta dele e salva uma cópia nessa pasta
+(com o mesmo nome, `estoque_visual.xlsx`). Se a cópia estiver aberta por alguém ou o OneDrive
+estiver fora do ar, ele tenta de novo a cada minuto: os dados nunca deixam de ser lançados na planilha
+principal. Para parar de copiar: `py monitorar_grupo.py --sem-copia`. Com o monitor oculto rodando,
+o comando só salva a configuração: reinicie o monitor (`parar_monitor.bat` e `iniciar_oculto.vbs`).
+
 Só roda um monitor por vez: se tentar abrir outro, ele avisa e não abre. Se o WhatsApp pedir um
 QR code novo com o monitor escondido, a imagem do QR code abre sozinha na tela.
 

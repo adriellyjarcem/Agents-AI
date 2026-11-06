@@ -348,7 +348,7 @@ def escrever(ws, valores: dict) -> int:
 
 
 def lancar(ws_resumo, ws_detalhe, reg: RegistroImagem, informe: dict, grupo: str,
-           arquivo_final: Path, planilha: Path, hash_: str) -> None:
+           arquivo_final: Path, planilha: Path, hash_: str, link_absoluto: bool = False) -> None:
     data_inf = data_do_informe(informe["data_informe"])
     unidade = informe["unidade"]
     conferencia = conferir(informe)
@@ -365,6 +365,8 @@ def lancar(ws_resumo, ws_detalhe, reg: RegistroImagem, informe: dict, grupo: str
     ws_resumo.cell(row=linha, column=col["Hora"]).number_format = "HH:MM"
     link = ws_resumo.cell(row=linha, column=col["Link"])
     try:
+        if link_absoluto:  # a planilha também é copiada para outra pasta: o link precisa do caminho todo
+            raise ValueError
         link.hyperlink = str(arquivo_final.resolve().relative_to(planilha.resolve().parent))
     except ValueError:
         link.hyperlink = arquivo_final.resolve().as_uri()

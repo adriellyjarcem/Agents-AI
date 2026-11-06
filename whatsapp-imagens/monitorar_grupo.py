@@ -30,9 +30,11 @@ import json
 import logging
 import os
 import queue
+import shutil
 import socket
 import sys
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -54,6 +56,7 @@ ARQUIVO_PARAR = PASTA / "parar.flag"  # criado pelo parar_monitor.bat
 ARQUIVO_PID = PASTA / "monitor.pid"
 PORTA_TRAVA = 48731  # só uma cópia do monitor por vez (porta local, não abre nada para a rede)
 SAIDA_JA_RODANDO = 3
+ESPERA_COPIA = 60  # segundos entre tentativas de copiar para a pasta de destino
 ESPERA_PLANILHA_ABERTA = 60  # segundos entre tentativas quando a planilha está aberta no Excel
 
 log = logging.getLogger("monitor")
@@ -87,6 +90,14 @@ def chave_jid(jid) -> str:
     return f"{jid.User}@{jid.Server}"
 
 
+def destino_da_copia(copiar_para: str | None, planilha: Path) -> Path | None:
+    """Pasta (ou arquivo .xlsx) onde salvar uma cópia da planilha depois de cada lançamento."""
+    if not copiar_para:
+        return None
+    destino = Path(copiar_para.strip().strip('"'))
+    return destino if destino.suffix.lower() == ".xlsx" else destino / planilha.name
+
+
 def para_datahora(timestamp: int) -> datetime:
     # O neonize entrega o horário em milissegundos; aceita segundos por garantia
     return datetime.fromtimestamp(timestamp / 1000 if timestamp > 10**11 else timestamp)
@@ -109,6 +120,9 @@ def midia_da_mensagem(mensagem):
 class Monitor:
     def __init__(self, planilha: Path, pasta_imagens: Path, config: dict):
         self.planilha = planilha
+        self.copia = destino_da_copia(config.get("copiar_para"), planilha)
+        self.copia_pendente = self.copia is not None  # ao abrir, atualiza a cópia uma vez
+        self.ultima_tentativa_copia = 0.0
         self.pasta_imagens = pasta_imagens
         self.config = config
         self.leitor = LeitorInforme()
@@ -210,6 +224,8 @@ class Monitor:
             try:
                 tarefa = self.fila.get(timeout=1)
             except queue.Empty:
+                if self.copia_pendente and time.monotonic() - self.ultima_tentativa_copia >= ESPERA_COPIA:
+                    self.copiar()
                 continue
             try:
                 if tarefa[0] == "baixar":
@@ -274,14 +290,49 @@ class Monitor:
         if hash_ in ci.hashes_existentes(ws_resumo) | ci.hashes_existentes(ws_ignoradas):
             return False
         if informe["eh_informe_estoque"]:
-            ci.lancar(ws_resumo, ws_detalhe, reg, informe, grupo, reg.caminho, self.planilha, hash_)
+            ci.lancar(ws_resumo, ws_detalhe, reg, informe, grupo, reg.caminho, self.planilha, hash_,
+                      link_absoluto=self.copia is not None)
         else:
             ci.escrever(ws_ignoradas, {"Enviado em": reg.quando.date(), "Remetente": reg.remetente,
                                        "Arquivo": reg.arquivo, "Hash (SHA-256)": hash_})
         ci.finalizar_abas(ws_resumo, ws_detalhe, ws_ignoradas)
         self.planilha.parent.mkdir(parents=True, exist_ok=True)
         wb.save(self.planilha)
+        if self.copia is not None:
+            self.copia_pendente = True
+            self.copiar()
         return True
+
+    def copiar(self) -> None:
+        """Salva uma cópia da planilha na pasta de destino (ex.: OneDrive/SharePoint).
+
+        Grava primeiro um arquivo temporário e depois troca, para quem lê a pasta (OneDrive,
+        Power BI) nunca pegar a planilha pela metade. Se o arquivo de lá estiver aberto por
+        alguém, tenta de novo a cada minuto; a planilha principal já está salva."""
+        self.ultima_tentativa_copia = time.monotonic()
+        if not self.planilha.exists():
+            self.copia_pendente = False
+            return
+        temporario = self.copia.with_name(f"~tmp_{self.copia.name}")
+        try:
+            if not self.copia.parent.is_dir():
+                raise FileNotFoundError(f"a pasta {self.copia.parent} não existe ou o OneDrive não está sincronizado")
+            shutil.copyfile(self.planilha, temporario)
+            os.replace(temporario, self.copia)
+        except OSError as erro:
+            if temporario.parent.is_dir():
+                temporario.unlink(missing_ok=True)
+            if not self.copia_pendente or self.ultima_tentativa_copia - getattr(self, "_aviso_copia", -1e9) > 1800:
+                self._aviso_copia = self.ultima_tentativa_copia  # avisa no máximo a cada 30 min
+                motivo = "o arquivo está aberto por alguém" if isinstance(erro, PermissionError) else erro
+                log.warning(f"Não consegui salvar a cópia em {self.copia} ({motivo}). "
+                            f"Tento de novo a cada {ESPERA_COPIA // 60} min.")
+            self.copia_pendente = True
+            return
+        if self.copia_pendente and getattr(self, "_aviso_copia", None) is not None:
+            log.info("Cópia da planilha atualizada no destino.")
+            self._aviso_copia = None
+        self.copia_pendente = False
 
     def pendentes_no_disco(self) -> None:
         """Imagens já baixadas mas não lançadas (PC desligou, erro...): lança agora."""
@@ -302,25 +353,12 @@ def main() -> None:
     p.add_argument("--trocar-grupo", action="store_true", help="esquece o grupo salvo e pergunta de novo")
     p.add_argument("--planilha", type=Path, help="planilha de saída (padrão: estoque_visual.xlsx nesta pasta)")
     p.add_argument("--pasta-imagens", type=Path, help="onde guardar as imagens (padrão: pasta 'imagens' aqui)")
+    p.add_argument("--copiar-para", metavar="PASTA",
+                   help="depois de cada lançamento, salva uma cópia da planilha nesta pasta (ex.: OneDrive)")
+    p.add_argument("--sem-copia", action="store_true", help="para de salvar a cópia em outra pasta")
     args = p.parse_args()
 
     configurar_log()
-
-    # Duas cópias ao mesmo tempo brigariam pela mesma sessão do WhatsApp
-    trava = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        trava.bind(("127.0.0.1", PORTA_TRAVA))
-    except OSError:
-        log.info("O monitor já está rodando (talvez escondido). Para parar: parar_monitor.bat")
-        sys.exit(SAIDA_JA_RODANDO)
-    ARQUIVO_PARAR.unlink(missing_ok=True)
-    ARQUIVO_PID.write_text(str(os.getpid()))
-
-    try:
-        from neonize.client import NewClient
-        from neonize.events import ConnectedEv, LoggedOutEv, MessageEv
-    except ImportError:
-        sys.exit("Falta a biblioteca neonize. Instale com:  py -m pip install -r requirements.txt")
 
     config = ler_config()
     if args.trocar_grupo or (args.grupo and ci.normalizar(args.grupo) not in ci.normalizar(config.get("grupo_nome", ""))):
@@ -333,7 +371,32 @@ def main() -> None:
     planilha = Path(config.get("planilha", PASTA / "estoque_visual.xlsx"))
     pasta_imagens = Path(config.get("pasta_imagens", PASTA / "imagens"))
     pasta_imagens.mkdir(parents=True, exist_ok=True)
+    if args.copiar_para:
+        config["copiar_para"] = args.copiar_para.strip().strip('"')
+    if args.sem_copia:
+        config.pop("copiar_para", None)
     salvar_config(config)
+    mudou_config = bool(args.copiar_para or args.sem_copia or args.planilha or args.pasta_imagens)
+
+    # Duas cópias ao mesmo tempo brigariam pela mesma sessão do WhatsApp
+    trava = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        trava.bind(("127.0.0.1", PORTA_TRAVA))
+    except OSError:
+        log.info("O monitor já está rodando (talvez escondido). Para parar: parar_monitor.bat")
+        if mudou_config:
+            log.info("A configuração foi salva; ela vale quando o monitor for reiniciado "
+                     "(parar_monitor.bat e depois iniciar_oculto.vbs).")
+        sys.exit(SAIDA_JA_RODANDO)
+    ARQUIVO_PARAR.unlink(missing_ok=True)
+    ARQUIVO_PID.write_text(str(os.getpid()))
+
+    try:
+        from neonize.client import NewClient
+        from neonize.events import ConnectedEv, LoggedOutEv, MessageEv
+    except ImportError:
+        sys.exit("Falta a biblioteca neonize. Instale com:  py -m pip install -r requirements.txt")
+
 
     monitor = Monitor(planilha, pasta_imagens, config)
     os.chdir(PASTA)  # a sessão do WhatsApp fica salva nesta pasta
@@ -344,6 +407,8 @@ def main() -> None:
     cliente.event(MessageEv)(monitor.ao_receber_mensagem)
 
     log.info(f"Planilha: {planilha}")
+    if monitor.copia:
+        log.info(f"Cópia depois de cada lançamento: {monitor.copia}")
     log.info("Conectando ao WhatsApp...")
     def conectar():
         try:
