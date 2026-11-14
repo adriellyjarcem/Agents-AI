@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Colorir PDF</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ESTANTE -->
+<section id="view-library" class="view active">
+  <header class="bar">
+    <h1>Minha estante</h1>
+    <select id="sort" aria-label="Ordenar">
+      <option value="added">Mais recentes</option>
+      <option value="opened">Abertos por último</option>
+      <option value="name">Nome A–Z</option>
+    </select>
+  </header>
+  <div class="scroll">
+    <div id="shelf" class="grid shelf"></div>
+    <div id="empty" class="empty" hidden>
+      <div class="empty-art">🎨</div>
+      <h2>Sua estante está vazia</h2>
+      <p>Toque em <b>Adicionar PDF</b> para trazer seu primeiro livro de colorir.</p>
+    </div>
+  </div>
+  <button id="add" class="fab"><svg class="ic"><use href="#i-plus"/></svg> Adicionar PDF</button>
+  <input id="file" type="file" accept="application/pdf,.pdf" multiple hidden>
+</section>
+
+<!-- PÁGINAS DO LIVRO -->
+<section id="view-book" class="view">
+  <header class="bar">
+    <button class="icon-btn" data-act="back" aria-label="Voltar"><svg class="ic"><use href="#i-back"/></svg></button>
+    <h1 id="book-title"></h1>
+    <span id="book-progress" class="pill"></span>
+  </header>
+  <div class="scroll"><div id="pages" class="grid pages"></div></div>
+</section>
+
+<!-- PINTURA -->
+<section id="view-paint" class="view">
+  <header class="bar paint-bar">
+    <button class="icon-btn" data-act="back" aria-label="Voltar"><svg class="ic"><use href="#i-back"/></svg></button>
+    <button class="icon-btn" id="prev" aria-label="Página anterior"><svg class="ic"><use href="#i-prev"/></svg></button>
+    <span id="page-label" class="pill"></span>
+    <button class="icon-btn" id="next" aria-label="Próxima página"><svg class="ic"><use href="#i-next"/></svg></button>
+    <span class="grow"></span>
+    <button class="icon-btn" id="undo" aria-label="Desfazer"><svg class="ic"><use href="#i-undo"/></svg></button>
+    <button class="icon-btn" id="redo" aria-label="Refazer"><svg class="ic"><use href="#i-redo"/></svg></button>
+    <button class="icon-btn" id="fit" aria-label="Ajustar à tela"><svg class="ic"><use href="#i-fit"/></svg></button>
+    <button class="icon-btn" id="clear" aria-label="Limpar página"><svg class="ic"><use href="#i-trash"/></svg></button>
+    <button class="icon-btn" id="export" aria-label="Salvar na galeria"><svg class="ic"><use href="#i-save"/></svg></button>
+  </header>
+
+  <div id="stage">
+    <div id="board">
+      <canvas id="c-paint"></canvas>
+      <canvas id="c-stroke"></canvas>
+      <canvas id="c-lines"></canvas>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div id="tools" class="tools"></div>
+    <div class="sliders">
+      <label>Tamanho <output id="size-out"></output><input id="size" type="range" min="1" max="200" step="1"></label>
+      <label>Opacidade <output id="op-out"></output><input id="opacity" type="range" min="5" max="100" step="5"></label>
+    </div>
+    <div class="colors">
+      <button id="cur-color" class="cur-color" aria-label="Escolher cor"></button>
+      <div id="recents" class="recents"></div>
+      <button id="open-palette" class="chip">Paleta</button>
+    </div>
+  </div>
+
+  <div id="sheet" class="sheet" hidden>
+    <div class="sheet-head">
+      <div class="tabs">
+        <button class="tab active" data-tab="pal">Minha paleta</button>
+        <button class="tab" data-tab="mix">Criar cor</button>
+      </div>
+      <button class="icon-btn" id="close-sheet" aria-label="Fechar"><svg class="ic"><use href="#i-close"/></svg></button>
+    </div>
+    <div id="tab-pal" class="tab-body"><div id="swatches" class="swatches"></div></div>
+    <div id="tab-mix" class="tab-body" hidden>
+      <canvas id="sv" width="300" height="170"></canvas>
+      <input id="hue" type="range" min="0" max="360" step="1" class="hue">
+      <div class="mix-row">
+        <span id="mix-preview" class="cur-color"></span>
+        <input id="hex" type="text" maxlength="7" spellcheck="false" autocomplete="off" aria-label="Código da cor">
+        <button id="use-mix" class="chip primary">Usar cor</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div id="busy" class="busy" hidden><div class="spinner"></div><p id="busy-text"></p></div>
+<div id="toast" class="toast" hidden></div>
+<div id="modal" class="modal" hidden><div class="modal-card">
+  <h2 id="modal-title"></h2>
+  <p id="modal-text"></p>
+  <input id="modal-input" type="text" hidden>
+  <div id="modal-btns" class="modal-btns"></div>
+</div></div>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></symbol>
+    <symbol id="i-prev" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+    <symbol id="i-next" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14L4 9l5-5M4 9h10a6 6 0 010 12h-3"/></symbol>
+    <symbol id="i-redo" viewBox="0 0 24 24"><path d="M15 14l5-5-5-5M20 9H10a6 6 0 000 12h3"/></symbol>
+    <symbol id="i-fit" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></symbol>
+    <symbol id="i-save" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><path d="M12 5h.01M12 12h.01M12 19h.01" stroke-width="3"/></symbol>
+    <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20l1-5L16 4l4 4L9 19zM14 6l4 4"/></symbol>
+    <symbol id="i-marker" viewBox="0 0 24 24"><path d="M9 14l8-10 3 2-7 11zM9 14l-2 5 6-2M4 21h8"/></symbol>
+    <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M5 19l1-4L17 4l3 3L9 18zM5 19l4-1M15 6l3 3"/></symbol>
+    <symbol id="i-crayon" viewBox="0 0 24 24"><path d="M8 21V10l2-6h4l2 6v11zM8 13h8M8 17h8"/></symbol>
+    <symbol id="i-water" viewBox="0 0 24 24"><path d="M20 4l-9 9M11 13l2 2c-1 4-4 5-9 5 2-2 1-5 4-7z"/></symbol>
+    <symbol id="i-spray" viewBox="0 0 24 24"><path d="M6 10h8v11H6zM8 10V7h4v3M10 7V5M17 4h.01M20 6h.01M17 8h.01M20 2h.01M20 10h.01" /></symbol>
+    <symbol id="i-glitter" viewBox="0 0 24 24"><path d="M10 4l1.8 5.2L17 11l-5.2 1.8L10 18l-1.8-5.2L3 11l5.200-1.8zM18 15l.9 2.1L21 18l-2.1.9L18 21l-.9-2.100L15 18l2.100-.9z"/></symbol>
+    <symbol id="i-eraser" viewBox="0 0 24 24"><path d="M4 15l9-10 7 6-8 9H8zM9 10l6 6M12 20h8"/></symbol>
+    <symbol id="i-fill" viewBox="0 0 24 24"><path d="M11 3l8 8-7 7a2 2 0 01-3 0l-5-5a2 2 0 010-3zM4 12h14M20 15c1 1.500 1.500 2.500 1.500 3.300a1.500 1.500 0 01-3 0c0-.8.5-1.800 1.500-3.300z"/></symbol>
+    <symbol id="i-pick" viewBox="0 0 24 24"><path d="M13 8l3 3M16 4a2.100 2.100 0 013 3l-3 3-3-3zM13 8l-8 8v3h3l8-8"/></symbol>
+  </defs>
+</svg>
+
+<script src="vendor/pdf.min.js"></script>
+<script src="palette.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
