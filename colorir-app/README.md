@@ -43,6 +43,8 @@ A pasta `web/` é um site estático completo e instalável (PWA): tem `manifest.
 
 - **Hostinger**: no hPanel, abra o Gerenciador de Arquivos, entre em `public_html` (ou numa subpasta,
   ex. `public_html/colorir`), envie `dist/colorir-pdf-site.zip` e extraia ali. O `.htaccess` já vai junto.
+  Ou, de uma sessão com o token da API da Hostinger configurado:
+  `python3 deploy_hostinger.py <usuario> <dominio> colorir web` (envia `web/` para `public_html/colorir`).
 - **Firebase Hosting**: `firebase.json` aponta para `web/`. Com o Firebase CLI:
   `firebase deploy --only hosting --project <id-do-projeto>` dentro de `colorir-app/`.
 
