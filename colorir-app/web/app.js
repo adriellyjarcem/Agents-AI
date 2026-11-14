@@ -624,6 +624,16 @@
   };
 
   // --- exportar
+  function showForLongPress(blob) {
+    var url = URL.createObjectURL(blob);
+    var ov = el('div', 'modal');
+    ov.innerHTML = '<div class="modal-card"><h2>Salvar imagem</h2><p>Segure o dedo sobre a imagem e escolha "Salvar imagem" (ou "Adicionar a Fotos").</p>' +
+      '<img alt="Página pintada" style="width:100%;max-height:55vh;object-fit:contain;border-radius:10px;-webkit-user-select:auto;user-select:auto;-webkit-touch-callout:default">' +
+      '<div class="modal-btns" style="margin-top:12px"><button class="primary">Fechar</button></div></div>';
+    $('img', ov).src = url;
+    $('button', ov).onclick = function () { ov.remove(); URL.revokeObjectURL(url); };
+    document.body.appendChild(ov);
+  }
   function saveFail(e) { console.error(e); toast('Não consegui salvar a imagem.', 3500); }
   $('#export').onclick = function () {
     busy('Salvando imagem…');
@@ -641,7 +651,8 @@
         });
       } else if (window.claude && window.claude.use) { // versão publicada como página
         job = Promise.all([window.claude.use('downloads'), new Promise(function (res) { full.toBlob(res, 'image/png'); })]).then(function (r) {
-          if (!r[0] || !r[1]) { toast('Este visualizador não permite salvar arquivos.', 4000); return; }
+          if (!r[1]) { saveFail(new Error('toBlob')); return; }
+          if (!r[0]) { showForLongPress(r[1]); return; } // sem permissão de download: mostra a imagem para salvar com toque longo
           idle();
           return r[0].save({ filename: name, data: r[1] }).then(function () { toast('Imagem salva'); }, function (e) {
             if (e && e.code === 'declined') return;
@@ -924,7 +935,7 @@
   }
   stage.addEventListener('pointerup', up);
   stage.addEventListener('pointercancel', up);
-  document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  document.addEventListener('contextmenu', function (e) { if (e.target.tagName !== 'IMG' || !e.target.closest('.modal')) e.preventDefault(); });
 
   // ---------------------------------------------------------------- início
   Promise.all([kvGet('cfg', null), kvGet('sort', 'added')]).then(function (r) {
