@@ -624,23 +624,37 @@
   };
 
   // --- exportar
+  function saveFail(e) { console.error(e); toast('Não consegui salvar a imagem.', 3500); }
   $('#export').onclick = function () {
     busy('Salvando imagem…');
     setTimeout(function () {
-      try {
-        var name = (state.book.name.replace(/[^\wÀ-ɏ -]+/g, '').trim() || 'pintura') + ' - pag ' + P.n + ' - ' + Date.now().toString(36) + '.png';
-        var url = compose(0).toDataURL('image/png');
-        if (hasAndroid) {
+      var name = (state.book.name.replace(/[^\wÀ-ɏ -]+/g, '').trim() || 'pintura') + ' - pag ' + P.n + ' - ' + Date.now().toString(36) + '.png';
+      var full = compose(0), job;
+      if (hasAndroid) {
+        job = new Promise(function (res) {
+          var url = full.toDataURL('image/png');
           var r = window.Android.saveImage(url.slice(url.indexOf(',') + 1), name);
           if (r === 'ok') toast('Salvo na galeria, em Imagens/ColorirPDF');
           else if (r === 'perm') toast('Permita o acesso ao armazenamento e toque em salvar de novo.', 4000);
           else toast('Não consegui salvar a imagem.', 3500);
-        } else {
-          var a = el('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
-          toast('Imagem baixada');
-        }
-      } catch (e) { console.error(e); toast('Não consegui salvar a imagem.'); }
-      idle();
+          res();
+        });
+      } else if (window.claude && window.claude.use) { // versão publicada como página
+        job = Promise.all([window.claude.use('downloads'), new Promise(function (res) { full.toBlob(res, 'image/png'); })]).then(function (r) {
+          if (!r[0] || !r[1]) { toast('Este visualizador não permite salvar arquivos.', 4000); return; }
+          idle();
+          return r[0].save({ filename: name, data: r[1] }).then(function () { toast('Imagem salva'); }, function (e) {
+            if (e && e.code === 'declined') return;
+            saveFail(e);
+          });
+        });
+      } else {
+        job = new Promise(function (res) {
+          var a = el('a'); a.href = full.toDataURL('image/png'); a.download = name; document.body.appendChild(a); a.click(); a.remove();
+          toast('Imagem baixada'); res();
+        });
+      }
+      job.catch(saveFail).then(idle);
     }, 60);
   };
 
@@ -927,5 +941,10 @@
     setColor(cfg.color, true); setTool(cfg.tool); renderRecents();
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function () {});
     return renderLibrary();
-  }).catch(function (e) { console.error(e); toast('Erro ao iniciar o app: ' + e.message, 6000); });
+  }).catch(function (e) {
+    console.error(e);
+    $('#empty').hidden = false;
+    $('#empty').innerHTML = '<div class="empty-art">🔒</div><h2>Armazenamento bloqueado</h2><p>Este navegador não deixou o app guardar seus livros (janela anônima ou dados do site bloqueados). Abra em uma janela normal e tente de novo.</p>';
+    $('#add').hidden = true;
+  });
 })();
