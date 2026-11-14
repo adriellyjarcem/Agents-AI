@@ -659,10 +659,22 @@
             saveFail(e);
           });
         });
-      } else {
-        job = new Promise(function (res) {
-          var a = el('a'); a.href = full.toDataURL('image/png'); a.download = name; document.body.appendChild(a); a.click(); a.remove();
-          toast('Imagem baixada'); res();
+      } else { // site: no celular abre o menu de compartilhar (Salvar imagem); senão, baixa o arquivo
+        job = new Promise(function (res) { full.toBlob(res, 'image/png'); }).then(function (blob) {
+          if (!blob) throw new Error('toBlob');
+          var file = null;
+          try { file = new File([blob], name, { type: 'image/png' }); } catch (e) {}
+          if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+            idle();
+            return navigator.share({ files: [file] }).catch(function (e) {
+              if (e && e.name === 'AbortError') return;
+              showForLongPress(blob);
+            });
+          }
+          var url = URL.createObjectURL(blob), a = el('a');
+          a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
+          toast('Imagem baixada');
         });
       }
       job.catch(saveFail).then(idle);
@@ -951,6 +963,8 @@
     if (TOOL[cfg.tool].kind !== 'tap' && cfg.tool !== 'eraser') lastBrush = cfg.tool;
     setColor(cfg.color, true); setTool(cfg.tool); renderRecents();
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function () {});
+    // site instalável: guarda o app para abrir sem internet (não se aplica ao APK nem à página do Claude)
+    if (!hasAndroid && !window.claude && 'serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js').catch(function () {});
     return renderLibrary();
   }).catch(function (e) {
     console.error(e);

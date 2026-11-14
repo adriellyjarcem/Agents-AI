@@ -1,0 +1,6 @@
+# Hostinger (Apache): tipos corretos e sem cache para os arquivos que controlam atualização
+AddType application/manifest+json .webmanifest
+AddType application/javascript .js
+<FilesMatch "^(sw\.js|index\.html|manifest\.webmanifest)$">
+  Header set Cache-Control "no-cache"
+</FilesMatch>

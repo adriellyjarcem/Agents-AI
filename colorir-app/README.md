@@ -35,3 +35,18 @@ Para testar a interface no computador: `python3 -m http.server --directory web` 
   estante. Exporte para a galeria o que quiser guardar.
 - O balde depende de linhas fechadas; em desenhos com falhas no contorno a cor pode "vazar"
   — só as linhas do próprio PDF seguram a tinta. Use desfazer e pinte essa área com um pincel.
+
+## Publicar como site (app instalável)
+
+A pasta `web/` é um site estático completo e instalável (PWA): tem `manifest.webmanifest`, ícones e
+`sw.js`, que guarda o app no aparelho para abrir sem internet. Qualquer hospedagem com HTTPS serve.
+
+- **Hostinger**: no hPanel, abra o Gerenciador de Arquivos, entre em `public_html` (ou numa subpasta,
+  ex. `public_html/colorir`), envie `dist/colorir-pdf-site.zip` e extraia ali. O `.htaccess` já vai junto.
+- **Firebase Hosting**: `firebase.json` aponta para `web/`. Com o Firebase CLI:
+  `firebase deploy --only hosting --project <id-do-projeto>` dentro de `colorir-app/`.
+
+No iPhone: abrir o endereço no Safari → Compartilhar → "Adicionar à Tela de Início".
+No Android: abrir no Chrome → menu ⋮ → "Instalar app".
+
+Ao publicar uma versão nova, aumente o número de `CACHE` em `web/sw.js`.
