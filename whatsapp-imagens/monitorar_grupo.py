@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import queue
+import re
 import shutil
 import socket
 import sys
@@ -44,6 +45,7 @@ sys.path.insert(0, str(PASTA))
 try:
     import coletar_imagens as ci  # noqa: E402
     from leitor_informe import ErroLeitura, LeitorInforme  # noqa: E402
+    from visitas import ColetorVisitas  # noqa: E402
 except ModuleNotFoundError as erro:
     sys.exit(f"Falta a biblioteca '{erro.name}'. Rode o instalar.bat, ou no cmd, nesta pasta:\n"
              f"  py -m pip install -r requirements.txt")
@@ -123,6 +125,13 @@ class Monitor:
         self.copia = destino_da_copia(config.get("copiar_para"), planilha)
         self.copia_pendente = self.copia is not None  # ao abrir, atualiza a cópia uma vez
         self.ultima_tentativa_copia = 0.0
+        # Visitas: mensagens e fotos de um contato (conversa individual), uma pasta por visita
+        self.visitas = None
+        if config.get("visitas_contato") and config.get("visitas_pasta"):
+            self.visitas = ColetorVisitas(PASTA / "visitas", Path(config["visitas_pasta"]), config["visitas_contato"])
+        self.visitas_pendente = self.visitas is not None  # ao abrir, confere as pastas uma vez
+        self.ultima_tentativa_visitas = 0.0
+        self._aviso_visitas = None
         self.pasta_imagens = pasta_imagens
         self.config = config
         self.leitor = LeitorInforme()
@@ -167,6 +176,8 @@ class Monitor:
     def ao_receber_mensagem(self, cliente, evento) -> None:
         origem = evento.Info.MessageSource
         if not origem.IsGroup:
+            if self.visitas is not None and not origem.IsFromMe:
+                self.fila.put(("privada", cliente, evento))  # confere o contato em segundo plano
             return
         midia = midia_da_mensagem(evento.Message)
         if midia is None:
@@ -226,9 +237,14 @@ class Monitor:
             except queue.Empty:
                 if self.copia_pendente and time.monotonic() - self.ultima_tentativa_copia >= ESPERA_COPIA:
                     self.copiar()
+                if self.visitas_pendente and time.monotonic() - self.ultima_tentativa_visitas >= ESPERA_COPIA:
+                    self.publicar_visitas()
                 continue
             try:
-                if tarefa[0] == "baixar":
+                if tarefa[0] == "privada":
+                    if self.visitas.eh_do_contato(tarefa[1], tarefa[2]) and self.visitas.registrar(tarefa[1], tarefa[2]):
+                        self.publicar_visitas()
+                elif tarefa[0] == "baixar":
                     imagem = self.baixar(tarefa[1], tarefa[2])
                     if imagem:
                         self.lancar(imagem)
@@ -236,6 +252,24 @@ class Monitor:
                     self.lancar(tarefa[1])
             except Exception:
                 log.exception("Erro inesperado; o monitor continua rodando.")
+
+    def publicar_visitas(self) -> None:
+        """Monta/atualiza as pastas das visitas; se o destino não estiver disponível, tenta depois."""
+        self.ultima_tentativa_visitas = time.monotonic()
+        try:
+            self.visitas.publicar()
+        except OSError as erro:
+            if self._aviso_visitas is None or self.ultima_tentativa_visitas - self._aviso_visitas > 1800:
+                self._aviso_visitas = self.ultima_tentativa_visitas  # avisa no máximo a cada 30 min
+                motivo = "um arquivo está aberto por alguém" if isinstance(erro, PermissionError) else erro
+                log.warning(f"Visitas: não consegui atualizar as pastas em {self.visitas.destino} ({motivo}). "
+                            f"As mensagens estão guardadas; tento de novo a cada {ESPERA_COPIA // 60} min.")
+            self.visitas_pendente = True
+            return
+        if self._aviso_visitas is not None:
+            log.info("Visitas: pastas atualizadas.")
+            self._aviso_visitas = None
+        self.visitas_pendente = False
 
     def baixar(self, cliente, evento) -> Path | None:
         info = evento.Info
@@ -356,6 +390,10 @@ def main() -> None:
     p.add_argument("--copiar-para", metavar="PASTA",
                    help="depois de cada lançamento, salva uma cópia da planilha nesta pasta (ex.: OneDrive)")
     p.add_argument("--sem-copia", action="store_true", help="para de salvar a cópia em outra pasta")
+    p.add_argument("--visitas-contato", metavar="NUMERO_OU_NOME",
+                   help="contato que manda as visitas (número com DDD, ex.: 67 99999-9999, ou o nome salvo)")
+    p.add_argument("--visitas-pasta", metavar="PASTA", help="pasta onde criar uma pasta para cada visita")
+    p.add_argument("--sem-visitas", action="store_true", help="para de coletar as visitas")
     args = p.parse_args()
 
     configurar_log()
@@ -375,8 +413,22 @@ def main() -> None:
         config["copiar_para"] = args.copiar_para.strip().strip('"')
     if args.sem_copia:
         config.pop("copiar_para", None)
+    if args.visitas_contato:
+        contato = args.visitas_contato.strip().strip('"')
+        if len(re.sub(r"\D", "", contato)) in (10, 11):  # número sem o 55: assume Brasil
+            contato = "55" + re.sub(r"\D", "", contato)
+        config["visitas_contato"] = contato
+    if args.visitas_pasta:
+        config["visitas_pasta"] = args.visitas_pasta.strip().strip('"')
+    if args.sem_visitas:
+        config.pop("visitas_contato", None)
+        config.pop("visitas_pasta", None)
     salvar_config(config)
-    mudou_config = bool(args.copiar_para or args.sem_copia or args.planilha or args.pasta_imagens)
+    if bool(config.get("visitas_contato")) != bool(config.get("visitas_pasta")):
+        log.warning("Visitas: falta configurar " + ("--visitas-pasta" if config.get("visitas_contato")
+                                                     else "--visitas-contato") + "; a coleta de visitas está desligada.")
+    mudou_config = bool(args.copiar_para or args.sem_copia or args.planilha or args.pasta_imagens
+                        or args.visitas_contato or args.visitas_pasta or args.sem_visitas)
 
     # Duas cópias ao mesmo tempo brigariam pela mesma sessão do WhatsApp
     trava = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -409,6 +461,8 @@ def main() -> None:
     log.info(f"Planilha: {planilha}")
     if monitor.copia:
         log.info(f"Cópia depois de cada lançamento: {monitor.copia}")
+    if monitor.visitas:
+        log.info(f"Visitas: mensagens de {config['visitas_contato']} vão para {monitor.visitas.destino}")
     log.info("Conectando ao WhatsApp...")
     def conectar():
         try:

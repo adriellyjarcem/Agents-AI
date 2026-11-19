@@ -90,6 +90,42 @@ O que é bom saber:
 > pode bloquear números que usam clientes não oficiais. O mais seguro é usar um **número dedicado**
 > (um chip só para isso) adicionado ao grupo.
 
+## Visitas (mensagens e fotos de um contato)
+
+O mesmo monitor também coleta as **visitas** que uma pessoa manda numa conversa individual com o
+número conectado. Cada visita é o que vem entre duas linhas de traços (`-----------`), e para cada uma
+é criada uma pasta:
+
+```
+Relatórios de visita\
+  2026-11-19 10h41 - Terminal do Breja\
+    Foto 01 - 10h42.jpg
+    Foto 02 - 10h42.jpg
+    Informações da visita.txt   (data, quem enviou, situação e todas as mensagens em ordem)
+    visita.json                 (as mesmas informações, para gerar relatórios depois)
+```
+
+- O nome da pasta usa a data, a hora da primeira mensagem e a **primeira linha do texto**.
+- Fotos, vídeos, áudios e documentos vão para a pasta, numerados e com o horário; localizações viram
+  um link do Google Maps no `.txt`. Fotos encaminhadas e mensagens editadas são indicadas.
+- A pasta é atualizada a cada mensagem. A visita fica "em andamento" até chegar o próximo separador.
+- **Edições e exclusões** no WhatsApp atualizam a pasta (foto apagada sai da pasta; título editado
+  renomeia a pasta). Se um separador for apagado e duas visitas virarem uma, a pasta que sobrou vai para
+  `_descartadas` (nada é apagado).
+- Mensagens de outras conversas, de grupos e as respostas do próprio número são ignoradas.
+- Se o OneDrive estiver indisponível, as mensagens ficam guardadas na pasta `visitas` do monitor e as
+  pastas são montadas quando ele voltar.
+- Só são coletadas as mensagens que chegam **depois** de configurar.
+
+**Configurar (uma vez)**, no cmd, na pasta do monitor:
+
+```bash
+py monitorar_grupo.py --visitas-contato "67 99999-9999" --visitas-pasta "C:\caminho\Relatórios de visita"
+```
+
+O contato pode ser o número com DDD (com ou sem o 9 e o +55) ou o nome salvo na agenda. Depois,
+reinicie o monitor (`parar_monitor.bat` e `iniciar_oculto.vbs`). Para desligar: `--sem-visitas`.
+
 ## Modo manual (exportação da conversa)
 
 Útil para lançar o histórico antigo. No celular: abra o grupo → ⋮ → **Mais** → **Exportar conversa**

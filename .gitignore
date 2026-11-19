@@ -12,3 +12,4 @@ whatsapp-imagens/*.xlsx
 __pycache__/
 whatsapp-imagens/parar.flag
 whatsapp-imagens/monitor.pid
+whatsapp-imagens/visitas/
