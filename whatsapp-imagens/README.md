@@ -137,6 +137,17 @@ Aparece um QR code: leia no celular em **Aparelhos conectados → Conectar um ap
 aceita até 4 aparelhos conectados no mesmo número). Essa pasta vira um segundo monitor, com sessão,
 log, `parar_monitor.bat`, `iniciar_oculto.vbs` e início automático próprios; o do estoque continua rodando.
 
+**Visitas antigas (recebidas antes de ligar o monitor):** exporte a conversa com a pessoa no celular
+(conversa → ⋮ → **Mais** → **Exportar conversa** → **Incluir mídia**), salve o `.zip` no computador e
+**arraste o `.zip` para cima do `importar_visitas.bat`** da pasta do monitor das visitas (ou, no cmd:
+`py importar_visitas.py "caminho\do\arquivo.zip"`).
+
+- Cria as pastas das visitas antigas do mesmo jeito que o monitor, na pasta configurada.
+- Pula o que o monitor já coletou e pode ser rodado de novo sem duplicar; pode rodar com o monitor ligado.
+- Na primeira vez pergunta quem é a pessoa que manda as visitas (a exportação traz as suas mensagens também).
+- Mensagens apagadas e figurinhas são ignoradas; mensagens editadas entram com o texto final.
+- Na exportação os horários vêm só com hora e minuto, e fotos encaminhadas não vêm marcadas.
+
 ## Modo manual (exportação da conversa)
 
 Útil para lançar o histórico antigo. No celular: abra o grupo → ⋮ → **Mais** → **Exportar conversa**

@@ -22,10 +22,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import shutil
 import threading
+import time
 import unicodedata
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -217,6 +220,57 @@ def nome_seguro(texto: str, limite: int = TAMANHO_TITULO) -> str:
     return texto.strip(" .") or "Visita"
 
 
+# --------------------------------------------------------------------------- trava entre programas
+
+
+def _processo_vivo(pid: int) -> bool:
+    if pid == os.getpid():
+        return True
+    if os.name == "nt":
+        import ctypes
+        k = ctypes.windll.kernel32
+        h = k.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        codigo = ctypes.c_ulong()
+        vivo = k.GetExitCodeProcess(h, ctypes.byref(codigo)) and codigo.value == 259  # STILL_ACTIVE
+        k.CloseHandle(h)
+        return bool(vivo)
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+@contextmanager
+def trava_de_arquivo(caminho: Path, avisar_depois: float = 10):
+    """Só um programa por vez mexe no registro e nas pastas (o monitor e o importador)."""
+    inicio, avisou = time.monotonic(), False
+    while True:
+        try:
+            fd = os.open(caminho, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, str(os.getpid()).encode())
+            os.close(fd)
+            break
+        except FileExistsError:
+            try:
+                dono = int(caminho.read_text().strip() or 0)
+            except (OSError, ValueError):
+                dono = 0
+            if dono and not _processo_vivo(dono):
+                caminho.unlink(missing_ok=True)  # o programa que travou foi fechado no meio
+                continue
+            if not avisou and time.monotonic() - inicio > avisar_depois:
+                log.info("Visitas: aguardando outro programa terminar de atualizar as visitas...")
+                avisou = True
+            time.sleep(0.5)
+    try:
+        yield
+    finally:
+        caminho.unlink(missing_ok=True)
+
+
 # --------------------------------------------------------------------------- coletor
 
 
@@ -232,7 +286,19 @@ class ColetorVisitas:
         self.nome_contato = "" if self.chave_contato else normalizar(contato)
         self.midia.mkdir(parents=True, exist_ok=True)
         self._lid_para_numero: dict[str, str] = {}
-        self._trava = threading.Lock()
+        self._trava_thread = threading.Lock()
+
+    @contextmanager
+    def _trava(self):
+        with self._trava_thread, trava_de_arquivo(self.pasta_local / ".trava"):
+            yield
+
+    def adicionar(self, registros: list[dict]) -> None:
+        """Acrescenta registros prontos (usado pelo importador da exportação da conversa)."""
+        with self._trava():
+            with self.registro.open("a", encoding="utf-8") as f:
+                for r in registros:
+                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
     # ---------------------------------------------------------------- de quem é a mensagem
 
@@ -272,7 +338,7 @@ class ColetorVisitas:
         dado = interpretar(evento)
         if dado is None:
             return False
-        with self._trava:
+        with self._trava():
             existentes = {r.get("id") for r in self._ler_registro() if r["tipo"] == "msg"}
             if dado["tipo"] == "msg" and dado["id"] in existentes:
                 return False  # o WhatsApp às vezes entrega a mesma mensagem de novo
@@ -330,7 +396,7 @@ class ColetorVisitas:
         """(Re)monta as pastas das visitas que mudaram. Devolve quantas foram atualizadas.
 
         Levanta OSError se a pasta de destino não estiver disponível (o monitor tenta de novo)."""
-        with self._trava:
+        with self._trava():
             if not self.destino.is_dir() and self.destino.parent.is_dir():
                 self.destino.mkdir()  # "Relatórios de visita" ainda não existe: cria dentro da pasta que existe
             if not self.destino.is_dir():
