@@ -126,6 +126,17 @@ py monitorar_grupo.py --visitas-contato "67 99999-9999" --visitas-pasta "C:\cami
 O contato pode ser o número com DDD (com ou sem o 9 e o +55) ou o nome salvo na agenda. Depois,
 reinicie o monitor (`parar_monitor.bat` e `iniciar_oculto.vbs`). Para desligar: `--sem-visitas`.
 
+**Visitas numa pasta separada, sem parar o monitor do estoque:** copie os arquivos do zip para outra
+pasta (ex.: `C:\MonitorVisitas`) e, nela, rode:
+
+```bash
+py monitorar_grupo.py --sem-estoque --visitas-contato "67 99999-9999" --visitas-pasta "C:\caminho\Relatórios de visita"
+```
+
+Aparece um QR code: leia no celular em **Aparelhos conectados → Conectar um aparelho** (o WhatsApp
+aceita até 4 aparelhos conectados no mesmo número). Essa pasta vira um segundo monitor, com sessão,
+log, `parar_monitor.bat`, `iniciar_oculto.vbs` e início automático próprios; o do estoque continua rodando.
+
 ## Modo manual (exportação da conversa)
 
 Útil para lançar o histórico antigo. No celular: abra o grupo → ⋮ → **Mais** → **Exportar conversa**

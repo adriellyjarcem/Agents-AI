@@ -26,6 +26,7 @@ dedicado que participe do grupo.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -56,7 +57,9 @@ ARQUIVO_QR = PASTA / "qrcode_whatsapp.png"
 EXTENSOES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif"}
 ARQUIVO_PARAR = PASTA / "parar.flag"  # criado pelo parar_monitor.bat
 ARQUIVO_PID = PASTA / "monitor.pid"
-PORTA_TRAVA = 48731  # só uma cópia do monitor por vez (porta local, não abre nada para a rede)
+# Só uma cópia do monitor por pasta (porta local, não abre nada para a rede). Cada pasta tem a sua
+# porta, então dá para ter um monitor em outra pasta (outro aparelho conectado no mesmo número).
+PORTA_TRAVA = 49000 + int(hashlib.sha1(str(PASTA).casefold().encode()).hexdigest(), 16) % 1000
 SAIDA_JA_RODANDO = 3
 ESPERA_COPIA = 60  # segundos entre tentativas de copiar para a pasta de destino
 ESPERA_PLANILHA_ABERTA = 60  # segundos entre tentativas quando a planilha está aberta no Excel
@@ -75,6 +78,31 @@ def configurar_log() -> None:
     log.setLevel(logging.INFO)
     log.propagate = False  # o neonize configura o log geral; evita mensagens duplicadas
     logging.getLogger("whatsmeow").setLevel(logging.WARNING)
+
+
+def processo_ativo(arquivo_pid: Path) -> bool:
+    """O monitor.pid desta pasta aponta para um processo que ainda está rodando?"""
+    try:
+        pid = int(arquivo_pid.read_text().strip())
+    except (OSError, ValueError):
+        return False
+    if pid == os.getpid():
+        return False
+    if os.name == "nt":
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        processo = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not processo:
+            return False
+        codigo = ctypes.c_ulong()
+        ativo = kernel32.GetExitCodeProcess(processo, ctypes.byref(codigo)) and codigo.value == 259  # STILL_ACTIVE
+        kernel32.CloseHandle(processo)
+        return bool(ativo)
+    try:
+        os.kill(pid, 0)  # só no Linux/Mac: sinal 0 apenas confere se o processo existe
+        return True
+    except OSError:
+        return False
 
 
 def ler_config() -> dict:
@@ -140,7 +168,8 @@ class Monitor:
         self.encerrar = threading.Event()
         self.alvo = config.get("grupo_jid")  # "123456@g.us"
         self.nome_alvo = config.get("grupo_nome", "")
-        self.antes_da_escolha: list = []  # mensagens que chegaram antes de escolher o grupo
+        self.antes_da_escolha: list = []
+        self.estoque = config.get("estoque", True)  # False: esta pasta só coleta as visitas  # mensagens que chegaram antes de escolher o grupo
         self.trava = threading.Lock()
 
     # ------------------------------------------------------------------ eventos do WhatsApp
@@ -179,6 +208,8 @@ class Monitor:
             if self.visitas is not None and not origem.IsFromMe:
                 self.fila.put(("privada", cliente, evento))  # confere o contato em segundo plano
             return
+        if not self.estoque:
+            return  # esta pasta só coleta visitas
         midia = midia_da_mensagem(evento.Message)
         if midia is None:
             return
@@ -394,6 +425,9 @@ def main() -> None:
                    help="contato que manda as visitas (número com DDD, ex.: 67 99999-9999, ou o nome salvo)")
     p.add_argument("--visitas-pasta", metavar="PASTA", help="pasta onde criar uma pasta para cada visita")
     p.add_argument("--sem-visitas", action="store_true", help="para de coletar as visitas")
+    p.add_argument("--sem-estoque", action="store_true",
+                   help="esta pasta não lê os informes de estoque (ex.: um monitor só para as visitas)")
+    p.add_argument("--com-estoque", action="store_true", help="volta a ler os informes de estoque")
     args = p.parse_args()
 
     configurar_log()
@@ -423,16 +457,26 @@ def main() -> None:
     if args.sem_visitas:
         config.pop("visitas_contato", None)
         config.pop("visitas_pasta", None)
+    if args.sem_estoque:
+        config["estoque"] = False
+    if args.com_estoque:
+        config.pop("estoque", None)
     salvar_config(config)
     if bool(config.get("visitas_contato")) != bool(config.get("visitas_pasta")):
         log.warning("Visitas: falta configurar " + ("--visitas-pasta" if config.get("visitas_contato")
                                                      else "--visitas-contato") + "; a coleta de visitas está desligada.")
     mudou_config = bool(args.copiar_para or args.sem_copia or args.planilha or args.pasta_imagens
-                        or args.visitas_contato or args.visitas_pasta or args.sem_visitas)
+                        or args.visitas_contato or args.visitas_pasta or args.sem_visitas
+                        or args.sem_estoque or args.com_estoque)
+    if config.get("estoque", True) is False and not (config.get("visitas_contato") and config.get("visitas_pasta")):
+        sys.exit("Esta pasta está com o estoque desligado (--sem-estoque) e sem visitas configuradas: "
+                 "não há nada para monitorar. Use --visitas-contato e --visitas-pasta.")
 
     # Duas cópias ao mesmo tempo brigariam pela mesma sessão do WhatsApp
     trava = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
+        if processo_ativo(ARQUIVO_PID):  # monitor desta pasta rodando (inclusive de versão anterior)
+            raise OSError("já rodando")
         trava.bind(("127.0.0.1", PORTA_TRAVA))
     except OSError:
         log.info("O monitor já está rodando (talvez escondido). Para parar: parar_monitor.bat")
@@ -458,7 +502,8 @@ def main() -> None:
     cliente.event(LoggedOutEv)(monitor.ao_desconectar_sessao)
     cliente.event(MessageEv)(monitor.ao_receber_mensagem)
 
-    log.info(f"Planilha: {planilha}")
+    if monitor.estoque:
+        log.info(f"Planilha: {planilha}")
     if monitor.copia:
         log.info(f"Cópia depois de cada lançamento: {monitor.copia}")
     if monitor.visitas:
@@ -485,11 +530,14 @@ def main() -> None:
         while not monitor.conectado.wait(1):
             if pediram_para_parar():
                 break
-        if monitor.conectado.is_set() and monitor.alvo is None and not monitor.encerrar.is_set():
+        if monitor.estoque and monitor.conectado.is_set() and monitor.alvo is None and not monitor.encerrar.is_set():
             monitor.escolher_grupo(cliente, args.grupo)
         if monitor.alvo and not monitor.encerrar.is_set():
             log.info(f'Monitorando o grupo "{monitor.nome_alvo}". Deixe esta janela aberta ou minimizada '
                      f'(Ctrl+C para sair).')
+        elif not monitor.estoque and monitor.conectado.is_set() and not monitor.encerrar.is_set():
+            log.info("Monitorando só as visitas (estoque desligado nesta pasta). "
+                     "Deixe esta janela aberta ou minimizada (Ctrl+C para sair).")
         while not monitor.encerrar.wait(1):
             pediram_para_parar()
     except KeyboardInterrupt:
@@ -501,7 +549,7 @@ def main() -> None:
         except Exception:
             pass
         ARQUIVO_PID.unlink(missing_ok=True)
-    sys.exit(1 if not monitor.alvo else 0)
+    sys.exit(0 if (monitor.alvo or not monitor.estoque) else 1)
 
 
 if __name__ == "__main__":
