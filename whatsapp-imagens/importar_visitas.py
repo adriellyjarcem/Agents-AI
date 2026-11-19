@@ -199,7 +199,7 @@ def main() -> None:
                     continue
                 if arquivo is None:
                     faltando += 1
-                    registro = {**base, "id": ident, "tipo": "msg", "texto": f"[{nome} não veio na exportação]"}
+                    registro = {**base, "id": ident, "tipo": "msg", "faltando": nome}
                 else:
                     h = sha256(arquivo)
                     if h in midias:  # o monitor já tem esta foto

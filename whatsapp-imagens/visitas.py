@@ -156,6 +156,7 @@ class Visita:
     chave: str = ""
     itens: list[Item] = field(default_factory=list)
     concluida: bool = False
+    antes_do_primeiro_separador: bool = False
 
     @property
     def inicio(self) -> datetime:
@@ -189,7 +190,7 @@ def dividir_texto(texto: str) -> list:
 
 def agrupar(mensagens: list[dict]) -> list[Visita]:
     visitas: list[Visita] = []
-    atual = Visita()
+    atual = Visita(antes_do_primeiro_separador=True)
     for msg in sorted(mensagens, key=lambda m: (m["quando"], m["ordem"])):
         if "texto" in msg:
             for i, parte in enumerate(dividir_texto(msg["texto"])):
@@ -208,6 +209,12 @@ def agrupar(mensagens: list[dict]) -> list[Visita]:
             atual.itens.append(Item(msg))
     if atual.itens:
         visitas.append(atual)
+    # O que vem antes do primeiro separador da conversa só é visita se foi coletado ao vivo
+    # (o monitor pode ter sido ligado no meio de uma visita). Vindo da exportação, é conversa
+    # antiga, de antes de começarem as visitas.
+    if visitas and visitas[0].antes_do_primeiro_separador \
+            and all(i.msg.get("importada") for i in visitas[0].itens):
+        visitas.pop(0)
     return visitas
 
 
@@ -377,6 +384,12 @@ class ColetorVisitas:
         registros = self._ler_registro()
         for ordem, r in enumerate(registros):
             if r["tipo"] == "msg":
+                r = dict(r)
+                # Formato antigo do importador: o aviso de arquivo faltando era guardado como texto
+                faltando = re.fullmatch(r"\[(.+) não veio na exportação\]", r.get("texto", ""))
+                if r.get("importada") and faltando:
+                    del r["texto"]
+                    r["faltando"] = faltando.group(1)
                 msgs.setdefault(r["id"], {**r, "ordem": ordem})
         # Edições e exclusões depois: podem chegar antes da mensagem original (PC estava desligado)
         for r in registros:
@@ -524,6 +537,8 @@ class ColetorVisitas:
                     linhas.append(f"    Legenda: {msg['legenda']}")
                 if msg.get("erro_download"):
                     linhas.append("    (não foi possível baixar este arquivo do WhatsApp)")
+            elif msg.get("faltando"):
+                linhas.append(f"{hora} {msg['faltando']}: arquivo não veio na exportação da conversa")
             elif msg.get("local"):
                 loc = msg["local"]
                 descricao = " - ".join(x for x in (loc.get("nome"), loc.get("endereco")) if x)
@@ -543,6 +558,7 @@ class ColetorVisitas:
                 "tipo": msg.get("midia_tipo") or ("localizacao" if msg.get("local") else "texto"),
                 "texto": item.texto or None, "arquivo": item.arquivo or None, "legenda": msg.get("legenda") or None,
                 "local": msg.get("local"), "encaminhada": msg.get("encaminhada") or None,
+                "arquivo_faltando": msg.get("faltando") or None,
                 "editada": msg.get("editada") or None,
             }.items() if v is not None})
         return {"titulo": visita.titulo, "inicio": visita.inicio.isoformat(), "fim": visita.fim.isoformat(),
